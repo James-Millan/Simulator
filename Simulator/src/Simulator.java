@@ -1,6 +1,7 @@
 import java.io.File;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Objects;
 import java.util.Scanner;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
@@ -31,19 +32,25 @@ public class Simulator {
         {
             registers.add(0);
         }
+        for(int i = 0; i < 64; i++)
+        {
+            registerFile.add(0);
+        }
         for(int i = 0; i < 512; i++)
         {
             memory.add(0);
         }
     }
     public boolean finished = false;
+    public int instructionsCount = 0;
     public int PC = 0;
     public int cycles = 0;
     public ArrayList<Integer> registers = new ArrayList<>();
+    public ArrayList<Integer> registerFile = new ArrayList<>();
     public ArrayList<Integer> memory = new ArrayList<>();
     public ArrayList<Instruction> instructions = new ArrayList<>();
 
-    public void initialise() {
+    public void initialise() throws InterruptedException {
         //preprocess inputs
         try {
             File myFile = new File("resources/input.txt");
@@ -61,7 +68,106 @@ public class Simulator {
         catch(Exception e){
             System.out.println("please name the input file:- \"input.txt\"");
         }
+
+        BlockingQueue<String> fetchQueue = new ArrayBlockingQueue<>(5);
+        BlockingQueue<Instruction> decodeQueue = new ArrayBlockingQueue<>(5);
+        BlockingQueue<ExecutionObj> executeQueue = new ArrayBlockingQueue<>(5);
+
+        //queues for clock to know to tick again
+        BlockingQueue<String> fetchClockQueue = new ArrayBlockingQueue<>(1);
+        BlockingQueue<String> decodeClockQueue = new ArrayBlockingQueue<>(1);
+        BlockingQueue<String> executeClockQueue = new ArrayBlockingQueue<>(1);
+
+
+
+        //TODO check if other parts have stalled before putting messages in their queue
+        //all instructions take one cycle so not necessary yet.
+        //TODO exit smoothly, something is still waiting.
+        Thread clockThread = new Thread(() -> {
+            while (!this.finished) {
+                System.out.println("Clock tick " + this.cycles++);
+                try {
+                    fetchQueue.put("Fetch");
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+                try {
+                    String message = fetchClockQueue.take();
+                    String message2 = decodeClockQueue.take();
+                    String message3 = executeClockQueue.take();
+                }
+                catch (Exception e)
+                {
+                    System.out.println("error receiving messages in the clock");
+                }
+            }
+            Thread.currentThread().interrupt();
+        });
+
+        Thread fetchThread = new Thread(() -> {
+            while (!this.finished) {
+                try {
+                    String message = fetchQueue.take();
+                    System.out.println("Fetching... " + message);
+                    if (this.PC >= 0 && this.PC < this.instructions.size())
+                    {
+                        Instruction instruction = this.instructions.get(this.PC);
+                        decodeQueue.put(instruction);
+                    }
+                    else {
+                        this.finished = true;
+                    }
+                    fetchClockQueue.put("tick please!");
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+
+            }
+            Thread.currentThread().interrupt();
+        });
+
+        Thread decodeThread = new Thread(() -> {
+            while (!this.finished) {
+                try {
+                    Instruction instruction = decodeQueue.take();
+                    ExecutionObj executionObj = decode(instruction);
+                    System.out.println("Decode received message: ");
+                    executeQueue.put(executionObj);
+                    decodeClockQueue.put("tick please!");
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+
+            }
+            Thread.currentThread().interrupt();
+        });
+
+        Thread executeThread = new Thread(() -> {
+            while (!this.finished) {
+                try {
+                    ExecutionObj executionObj = executeQueue.take();
+                    System.out.println("Execution received message");
+                    execute(executionObj);
+                    executeClockQueue.put("tick please!");
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+            Thread.currentThread().interrupt();
+        });
+
+        clockThread.start();
+        fetchThread.start();
+        decodeThread.start();
+        executeThread.start();
+
+        clockThread.join();
+        fetchThread.join();
+        decodeThread.join();
+        executeThread.join();
     }
+
+
     public void fetch(){
         if (this.PC < this.instructions.size())
         {
@@ -73,8 +179,8 @@ public class Simulator {
         }
 
     }
-    public void decode(Instruction instruction){
-        System.out.println("decode");
+    public ExecutionObj decode(Instruction instruction){
+        //System.out.println("decode");
         //Opcode opcode = Opcode.HALT;
         int r1 = -1;
         int r2 = -1;
@@ -85,23 +191,23 @@ public class Simulator {
         switch(instruction.opcode) {
             case BR: // BR ADDRESS
                 target_address = Integer.parseInt(instruction.operands[0]);
-                execute(instruction.opcode, constant, resultRegister, r1, r2, target_address, memory_address);
+                //execute(instruction.opcode, constant, resultRegister, r1, r2, target_address, memory_address);
                 break;
             case BZ: // BZ R1 ADDRESS
                 r1 = Integer.parseInt(instruction.operands[0]);
                 target_address = Integer.parseInt(instruction.operands[1]);
-                execute(instruction.opcode, constant, resultRegister, r1, r2, target_address, memory_address);
+                //execute(instruction.opcode, constant, resultRegister, r1, r2, target_address, memory_address);
                 break;
             case LD: // LD R1 MEM_ADDRESS
                 r1 = Integer.parseInt(instruction.operands[0]);
                 memory_address = Integer.parseInt(instruction.operands[1]);
-                execute(instruction.opcode, constant, resultRegister, r1, r2, target_address, memory_address);
+                //execute(instruction.opcode, constant, resultRegister, r1, r2, target_address, memory_address);
                 break;
 
             case ST: // ST R1 R2
                 r1 = Integer.parseInt(instruction.operands[0]);
                 r2 = Integer.parseInt(instruction.operands[1]);
-                execute(instruction.opcode, constant, resultRegister, r1, r2, target_address, memory_address);
+                //execute(instruction.opcode, constant, resultRegister, r1, r2, target_address, memory_address);
                 break;
             case ADD: // ADD R1 R2 REGRESULT
             case MUL: //MUL R1 R2 REGRESULT
@@ -111,42 +217,53 @@ public class Simulator {
                 r1 = Integer.parseInt(instruction.operands[0]);
                 r2 = Integer.parseInt(instruction.operands[1]);
                 resultRegister = Integer.parseInt(instruction.operands[2]);
-                execute(instruction.opcode, constant, resultRegister, r1, r2, target_address, memory_address);
+                //execute(instruction.opcode, constant, resultRegister, r1, r2, target_address, memory_address);
                 break;
             case LDI: //LDI REGRESULT CONST
                 resultRegister = Integer.parseInt(instruction.operands[0]);
                 constant = Integer.parseInt(instruction.operands[1]);
-                execute(instruction.opcode, constant, resultRegister, r1, r2, target_address, memory_address);
+                //execute(instruction.opcode, constant, resultRegister, r1, r2, target_address, memory_address);
                 break;
             case MOV: //MOV R1 REGRESULT
             case NOT: //NOT R1 REGRESULT
                 r1 = Integer.parseInt(instruction.operands[0]);
                 resultRegister = Integer.parseInt(instruction.operands[1]);
-                execute(instruction.opcode, constant, resultRegister, r1, r2, target_address, memory_address);
+                //execute(instruction.opcode, constant, resultRegister, r1, r2, target_address, memory_address);
                 break;
             case ADDI: //ADD R1 CONST REGRESULT
                 r1 = Integer.parseInt(instruction.operands[0]);
                 constant = Integer.parseInt(instruction.operands[1]);
                 resultRegister = Integer.parseInt(instruction.operands[2]);
-                execute(instruction.opcode, constant, resultRegister, r1, r2, target_address, memory_address);
+                //execute(instruction.opcode, constant, resultRegister, r1, r2, target_address, memory_address);
                 break;
             case BLEQ: //BLEQ R1 R2 ADDRESS
                 r1 = Integer.parseInt(instruction.operands[0]);
                 r2 = Integer.parseInt(instruction.operands[1]);
                 target_address = Integer.parseInt(instruction.operands[2]);
-                execute(instruction.opcode, constant, resultRegister, r1, r2, target_address, memory_address);
+                //execute(instruction.opcode, constant, resultRegister, r1, r2, target_address, memory_address);
                 break;
             case HALT: // HALT
-                execute(instruction.opcode, constant, resultRegister, r1, r2, target_address, memory_address);
+                //execute(instruction.opcode, constant, resultRegister, r1, r2, target_address, memory_address);
                 break;
             default:
                 System.out.println("Error, unknown OPCODE when decoding");
                 break;
         }
+        return new ExecutionObj(instruction.opcode, constant, resultRegister, r1, r2,
+                target_address, memory_address);
+
     }
 
-    public int execute(Opcode opcode, int constant, int resultRegister, int r1, int r2, int target_address, int memory_address){
-
+    public int execute(ExecutionObj executionObj){
+        Opcode opcode = executionObj.opcode;
+        int constant = executionObj.constant;
+        int  resultRegister = executionObj.resultRegister;
+        int r1 = executionObj.r1;
+        int r2 = executionObj.r2;
+        int target_address = executionObj.target_address;
+        int memory_address = executionObj.memory_address;
+        //TODO this should send a pair to set in memory to writeback
+        this.instructionsCount++;
         switch(opcode){
             case BR: {// BR ADDRESS
                 this.PC = target_address;
@@ -256,6 +373,18 @@ public class Simulator {
                 System.out.println("Error, unknown OPCODE");
                 return 1;
         }
+    }
+
+    public void writeBack()
+    {
+        for (int i = 0; i < registers.size(); i++) {
+            if(!Objects.equals(registers.get(i), registerFile.get(i)))
+            {
+                registerFile.set(i, registers.get(i));
+            }
+        }
+
+        //TODO receive messages from execute to set memory.
     }
     private void incrementPC() {
         this.PC = this.PC + 1;
