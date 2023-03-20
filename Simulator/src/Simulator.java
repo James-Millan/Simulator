@@ -81,6 +81,7 @@ public class Simulator {
 
 
         //TODO check if other parts have stalled before putting messages in their queue
+        //TODO issue stage to different execution units
         //all instructions take one cycle so not necessary yet.
         //TODO exit smoothly, something is still waiting.
         Thread clockThread = new Thread(() -> {
@@ -178,6 +179,12 @@ public class Simulator {
             this.finished = true;
         }
 
+    }
+
+    public ExecutionObj issue(ExecutionObj executionObj)
+    {
+        //TODO switch statement based on the opcode.
+        return null;
     }
     public ExecutionObj decode(Instruction instruction){
         //System.out.println("decode");
@@ -373,6 +380,25 @@ public class Simulator {
                 System.out.println("Error, unknown OPCODE");
                 return 1;
         }
+    }
+
+    public void alu()
+    {
+        //process all arithmetic with integers in here. Some instructions may take several cycles
+
+    }
+
+    public void branchPredictor()
+    {
+        //takes in a branch instruction as an input. needs to set a checkpoint that it can revert to if incorrect
+        // if (target_address > this.PC) don't take branch else take branch for a static implementation. Can create
+        // a cache of known branches to implement dynamic branch prediction at a later date.
+
+    }
+
+    public void floatingALU()
+    {
+
     }
 
     public void writeBack()
