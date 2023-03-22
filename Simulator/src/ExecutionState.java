@@ -9,7 +9,7 @@ public class ExecutionState {
         this.currentCycleNumber = 0;
     }
     public boolean isComplete(){
-        return currentCycleNumber >= cyclesForInstruction;
+        return currentCycleNumber == cyclesForInstruction;
     }
 
     public int getNumCycles(ExecutionObj executionObj) {
@@ -29,17 +29,17 @@ public class ExecutionState {
             }
             case BZ:
             case BLEQ: {
-                return 1;
+                return 2;
             }
             case LD: {
-                return 1;
+                return 4;
             }
             case CMP:
             case MUL: {
-                return 1;
+                return 3;
             }
             case DIV:
-                return 1;
+                return 10;
             default:
                 System.out.println("Error, unknown OPCODE");
                 return 1;

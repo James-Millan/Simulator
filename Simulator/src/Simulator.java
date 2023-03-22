@@ -176,10 +176,31 @@ public class Simulator {
         });
 
         this.executeThread = new Thread(() -> {
+            ExecutionState executionState = new ExecutionState(new ExecutionObj(Opcode.HALT, 0,0,0,0,0,0));
             while (!this.finished) {
                 try {
                     ExecutionObj executionObj = executeQueue.take();
-                    execute(executionObj);
+                    ExecutionObj oldExecutionObj = executionState.executionObj;
+                    if(oldExecutionObj.equals(executionObj))
+                    {
+                        executionState.currentCycleNumber++;
+                        if(executionState.isComplete())
+                        {
+                            execute(executionObj);
+                        }
+                    }
+                    else {
+                        executionState = new ExecutionState(executionObj);
+                        executionState.currentCycleNumber++;
+                        System.out.println("current - " + executionState.currentCycleNumber);
+                        System.out.println("needed - " + executionState.cyclesForInstruction);
+                        System.out.println("result - " + executionState.isComplete());
+                        if(executionState.isComplete())
+                        {
+                            execute(executionObj);
+                        }
+                    }
+
                     System.out.println("Execution received message");
                     if(executionObj.opcode == Opcode.HALT)
                     {
@@ -303,6 +324,7 @@ public class Simulator {
     }
 
     public int execute(ExecutionObj executionObj){
+        System.out.println("executing");
         Opcode opcode = executionObj.opcode;
         int constant = executionObj.constant;
         int  resultRegister = executionObj.resultRegister;
