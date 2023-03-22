@@ -5,6 +5,7 @@ import java.util.Objects;
 import java.util.Scanner;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.zip.CheckedOutputStream;
 
 
 enum Opcode {
@@ -22,7 +23,8 @@ enum Opcode {
     BLEQ,
     AND,
     NOT,
-    HALT
+    HALT,
+    DIV
 }
 
 public class Simulator {
@@ -49,7 +51,26 @@ public class Simulator {
     public ArrayList<Integer> registerFile = new ArrayList<>();
     public ArrayList<Integer> memory = new ArrayList<>();
     public ArrayList<Instruction> instructions = new ArrayList<>();
+    public Thread fetchThread;
+    public Thread decodeThread;
+    public Thread executeThread;
+    public Thread clockThread;
+    public Checkpoint lastCheckpoint;
 
+
+    public void shutdown() {
+        this.clockThread.interrupt();
+        this.clockThread.stop();
+
+        this.fetchThread.interrupt();
+        this.fetchThread.stop();
+
+        this.decodeThread.interrupt();
+        this.decodeThread.stop();
+
+        this.executeThread.interrupt();
+        this.executeThread.stop();
+    }
     public void initialise() throws InterruptedException {
         //preprocess inputs
         try {
@@ -83,8 +104,9 @@ public class Simulator {
         //TODO check if other parts have stalled before putting messages in their queue
         //TODO issue stage to different execution units
         //all instructions take one cycle so not necessary yet.
-        //TODO exit smoothly, something is still waiting.
-        Thread clockThread = new Thread(() -> {
+        //TODO make instructions take more than one cycle.
+
+        this.clockThread = new Thread(() -> {
             while (!this.finished) {
                 System.out.println("Clock tick " + this.cycles++);
                 try {
@@ -102,59 +124,77 @@ public class Simulator {
                     System.out.println("error receiving messages in the clock");
                 }
             }
-            Thread.currentThread().interrupt();
+            System.out.println("clock has broken out of its loop");
+            shutdown();
         });
 
-        Thread fetchThread = new Thread(() -> {
+        this.fetchThread = new Thread(() -> {
             while (!this.finished) {
                 try {
                     String message = fetchQueue.take();
                     System.out.println("Fetching... " + message);
-                    if (this.PC >= 0 && this.PC < this.instructions.size())
+                    if (this.PC < this.instructions.size())
                     {
                         Instruction instruction = this.instructions.get(this.PC);
                         decodeQueue.put(instruction);
+                        if(instruction.opcode == Opcode.HALT)
+                        {
+                            break;
+                        }
                     }
                     else {
                         this.finished = true;
+                        System.out.println("set finished to true");
                     }
                     fetchClockQueue.put("tick please!");
                 } catch (InterruptedException e) {
                     e.printStackTrace();
                 }
-
             }
-            Thread.currentThread().interrupt();
+            System.out.println("fetch has broken out of its loop");
+            shutdown();
         });
 
-        Thread decodeThread = new Thread(() -> {
+        this.decodeThread = new Thread(() -> {
             while (!this.finished) {
                 try {
                     Instruction instruction = decodeQueue.take();
                     ExecutionObj executionObj = decode(instruction);
                     System.out.println("Decode received message: ");
                     executeQueue.put(executionObj);
+                    if(instruction.opcode == Opcode.HALT)
+                    {
+                        break;
+                    }
                     decodeClockQueue.put("tick please!");
                 } catch (InterruptedException e) {
                     e.printStackTrace();
                 }
-
             }
-            Thread.currentThread().interrupt();
+            System.out.println("decode has broken out of its loop");
+            shutdown();
         });
 
-        Thread executeThread = new Thread(() -> {
+        this.executeThread = new Thread(() -> {
             while (!this.finished) {
                 try {
                     ExecutionObj executionObj = executeQueue.take();
-                    System.out.println("Execution received message");
                     execute(executionObj);
+                    System.out.println("Execution received message");
+                    if(executionObj.opcode == Opcode.HALT)
+                    {
+                        break;
+                    }
                     executeClockQueue.put("tick please!");
                 } catch (InterruptedException e) {
                     e.printStackTrace();
                 }
             }
-            Thread.currentThread().interrupt();
+            System.out.println("execute has broken out of its loop");
+
+            shutdown();
+            //Thread.currentThread().interrupt();
+            //executeThread.stop();
         });
 
         clockThread.start();
@@ -177,6 +217,7 @@ public class Simulator {
         else {
             System.out.println("invalid program counter");
             this.finished = true;
+            System.out.println("set finished to true");
         }
 
     }
@@ -374,6 +415,7 @@ public class Simulator {
             }
             case HALT: {// HALT
                 this.finished = true;
+                System.out.println("set finished to true");
                 return 0;
             }
             default:
@@ -382,17 +424,83 @@ public class Simulator {
         }
     }
 
-    public void alu()
+    public int alu(ExecutionObj executionObj)
     {
+        Opcode opcode = executionObj.opcode;
+        int constant = executionObj.constant;
+        int  resultRegister = executionObj.resultRegister;
+        int r1 = executionObj.r1;
+        int r2 = executionObj.r2;
+        int target_address = executionObj.target_address;
+        int memory_address = executionObj.memory_address;
         //process all arithmetic with integers in here. Some instructions may take several cycles
+        switch(opcode)
+        {
+            case ADD: {// ADD R1 R2 REGRESULT
+                int first = this.registers.get(r1);
+                int second = this.registers.get(r2);
+                this.registers.set(resultRegister, (first + second));
+                System.out.println("added registers :- " + r1 + " and " + r2 + " to get " + this.registers.get(resultRegister));
+
+                this.incrementPC();
+                return 0;
+            }
+            case SUB: {//SUB R1 R2 REGRESULT
+                int first = this.registers.get(r1);
+                int second = this.registers.get(r2);
+                this.registers.set(resultRegister, first - second);
+                this.incrementPC();
+                return 0;
+            }
+            case MUL: {//MUL R1 R2 REGRESULT
+                int first = this.registers.get(r1);
+                int second = this.registers.get(r2);
+                this.registers.set(resultRegister, first * second);
+                return 0;
+            }
+            case ADDI: {//ADD R1 CONST REGRESULT
+                int value = this.registers.get(r1);
+                this.registers.set(resultRegister, value + constant);
+                this.incrementPC();
+                return 0;
+            }
+            default: {
+                System.out.println("alu was wrongly assigned an instruction");
+                return 1;
+            }
+        }
 
     }
 
-    public void branchPredictor()
+    public void branchPredictor(ExecutionObj executionObj)
     {
         //takes in a branch instruction as an input. needs to set a checkpoint that it can revert to if incorrect
         // if (target_address > this.PC) don't take branch else take branch for a static implementation. Can create
         // a cache of known branches to implement dynamic branch prediction at a later date.
+        Opcode opcode = executionObj.opcode;
+        int constant = executionObj.constant;
+        int  resultRegister = executionObj.resultRegister;
+        int r1 = executionObj.r1;
+        int r2 = executionObj.r2;
+        int target_address = executionObj.target_address;
+        int memory_address = executionObj.memory_address;
+
+        int checkpointPC = this.PC;
+        ArrayList<Integer> checkPointRegisters = this.registers;
+        ArrayList<Integer> checkPointMem = this.memory;
+        //always take backwards branches
+        if(target_address > this.PC)
+        {
+            this.lastCheckpoint = new Checkpoint(checkpointPC, checkPointRegisters, checkPointMem, executionObj, false);
+            this.incrementPC();
+        }
+        else {
+            this.lastCheckpoint = new Checkpoint(checkpointPC, checkPointRegisters, checkPointMem, executionObj, true);
+            this.PC = target_address;
+        }
+        //TODO actually calculate the value of the branch. I think that we can check every branch instruction against executionObj
+        //and it's actual value. If this is different. reload the last checkpoint.
+
 
     }
 
