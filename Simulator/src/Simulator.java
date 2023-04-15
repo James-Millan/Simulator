@@ -53,6 +53,7 @@ public class Simulator {
     public ArrayList<Instruction> instructions = new ArrayList<>();
     public Thread fetchThread;
     public Thread decodeThread;
+    public Thread issueThread;
     public Thread executeThread;
     public Thread clockThread;
     public Checkpoint lastCheckpoint;
@@ -92,19 +93,20 @@ public class Simulator {
 
         BlockingQueue<String> fetchQueue = new ArrayBlockingQueue<>(5);
         BlockingQueue<Instruction> decodeQueue = new ArrayBlockingQueue<>(5);
+        BlockingQueue<ExecutionObj> issueQueue = new ArrayBlockingQueue<>(5);
         BlockingQueue<ExecutionObj> executeQueue = new ArrayBlockingQueue<>(5);
 
         //queues for clock to know to tick again
         BlockingQueue<String> fetchClockQueue = new ArrayBlockingQueue<>(1);
         BlockingQueue<String> decodeClockQueue = new ArrayBlockingQueue<>(1);
+        BlockingQueue<String> issueClockQueue = new ArrayBlockingQueue<>(1);
         BlockingQueue<String> executeClockQueue = new ArrayBlockingQueue<>(1);
 
 
 
-        //TODO check if other parts have stalled before putting messages in their queue
+        //later on check if other parts have stalled before putting messages in their queue not gonna do this yet as PC doesn't
+        //change in a scalar processor when it has stalled.
         //TODO issue stage to different execution units
-        //all instructions take one cycle so not necessary yet.
-        //TODO make instructions take more than one cycle.
 
         this.clockThread = new Thread(() -> {
             while (!this.finished) {
@@ -175,6 +177,21 @@ public class Simulator {
             shutdown();
         });
 
+        this.issueThread = new Thread(() -> {
+           ArrayList<ExecutionObj> instructionsToIssue = new ArrayList<>();
+            while (!this.finished) {
+                try {
+                    ExecutionObj executionObj = issueQueue.take();
+                }
+                catch (InterruptedException e)
+                {
+                    e.printStackTrace();
+                }
+            }
+            System.out.println("issue has broken out of its loop");
+            shutdown();
+        });
+
         this.executeThread = new Thread(() -> {
             ExecutionState executionState = new ExecutionState(new ExecutionObj(Opcode.HALT, 0,0,0,0,0,0));
             while (!this.finished) {
@@ -192,9 +209,6 @@ public class Simulator {
                     else {
                         executionState = new ExecutionState(executionObj);
                         executionState.currentCycleNumber++;
-                        System.out.println("current - " + executionState.currentCycleNumber);
-                        System.out.println("needed - " + executionState.cyclesForInstruction);
-                        System.out.println("result - " + executionState.isComplete());
                         if(executionState.isComplete())
                         {
                             execute(executionObj);
@@ -245,7 +259,7 @@ public class Simulator {
 
     public ExecutionObj issue(ExecutionObj executionObj)
     {
-        //TODO switch statement based on the opcode.
+        //TODO switch statement based on the opcode, can just merge with decode unit tbh.
         return null;
     }
     public ExecutionObj decode(Instruction instruction){
@@ -474,10 +488,48 @@ public class Simulator {
                 this.incrementPC();
                 return 0;
             }
+            case CMP: {//CMP R1 R2 REGRESULT
+                int first = this.registers.get(r1);
+                int second = this.registers.get(r2);
+
+                if (first > second) {
+                    this.registers.set(resultRegister, 1);
+                } else if (first == second) {
+                    this.registers.set(resultRegister, 0);
+                } else {
+                    this.registers.set(resultRegister, -1);
+                }
+                this.incrementPC();
+
+                return 0;
+            }
+            case AND: {//AND R1 R2 REGRESULT
+                int first = this.registers.get(r1);
+                int second = this.registers.get(r2);
+                this.registers.set(resultRegister, first & second);
+
+                return 0;
+            }
+            case LDI: {//LDI REGRESULT CONST
+                this.registers.set(resultRegister, constant);
+                System.out.println("set register :- " + resultRegister + " to " + constant);
+                this.incrementPC();
+                return 0;
+            }
+            case MOV: {//MOV R1 REGRESULT
+                int first = this.registers.get(r1);
+                this.registers.set(resultRegister, first);
+                return 0;
+            }
             case MUL: {//MUL R1 R2 REGRESULT
                 int first = this.registers.get(r1);
                 int second = this.registers.get(r2);
                 this.registers.set(resultRegister, first * second);
+                return 0;
+            }
+            case NOT: {//NOT R1 REGRESULT
+                int first = this.registers.get(r1);
+                this.registers.set(resultRegister, ~first);
                 return 0;
             }
             case ADDI: {//ADD R1 CONST REGRESULT
@@ -492,6 +544,34 @@ public class Simulator {
             }
         }
 
+    }
+
+    public int memoryAccess(ExecutionObj executionObj)
+    {
+        Opcode opcode = executionObj.opcode;
+        int constant = executionObj.constant;
+        int  resultRegister = executionObj.resultRegister;
+        int r1 = executionObj.r1;
+        int r2 = executionObj.r2;
+        int target_address = executionObj.target_address;
+        int memory_address = executionObj.memory_address;
+        switch(opcode) {
+            case LD: {// LD R1 MEM_ADDRESS
+                this.registers.set(r1, this.memory.get(memory_address));
+                this.incrementPC();
+                return 0;
+            }
+            case ST: {// ST R1 R2
+                int first = this.registers.get(r1);
+                int second = this.registers.get(r2);
+                this.memory.set(first, second);
+                this.incrementPC();
+                return 0;
+            }
+            default:
+                System.out.println("invalid execution object sent to memory access unit");
+                return 1;
+        }
     }
 
     public void branchPredictor(ExecutionObj executionObj)
@@ -526,10 +606,7 @@ public class Simulator {
 
     }
 
-    public void floatingALU()
-    {
 
-    }
 
     public void writeBack()
     {

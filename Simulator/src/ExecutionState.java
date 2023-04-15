@@ -16,7 +16,6 @@ public class ExecutionState {
         Opcode opcode = executionObj.opcode;
         switch(opcode){
             case BR:
-            case ST:
             case ADD:
             case SUB:
             case AND:
@@ -31,7 +30,8 @@ public class ExecutionState {
             case BLEQ: {
                 return 2;
             }
-            case LD: {
+            case LD:
+            case ST: {
                 return 4;
             }
             case CMP:
