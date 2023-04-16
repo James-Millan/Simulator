@@ -14,6 +14,8 @@ enum Opcode {
     SUB,
     MUL,
     CMP,
+    MOVA,
+    MOVB,
     LD,
     LDI,
     MOV,
@@ -251,17 +253,19 @@ public class Simulator {
                 memory_address = Integer.parseInt(instruction.operands[1]);
                 //execute(instruction.opcode, constant, resultRegister, r1, r2, target_address, memory_address);
                 break;
-
+            case MOVB:
+            case MOVA://MOVA R1 R2
             case ST: // ST R1 R2
-                r1 = Integer.parseInt(instruction.operands[0]);
+                r1 =  Integer.parseInt(instruction.operands[0]);
                 r2 = Integer.parseInt(instruction.operands[1]);
-                //execute(instruction.opcode, constant, resultRegister, r1, r2, target_address, memory_address);
                 break;
+            //execute(instruction.opcode, constant, resultRegister, r1, r2, target_address, memory_address);
             case ADD: // ADD R1 R2 REGRESULT
             case MUL: //MUL R1 R2 REGRESULT
             case AND: //AND R1 R2 REGRESULT
             case CMP: //CMP R1 R2 REGRESULT
             case SUB: //SUB R1 R2 REGRESULT
+            case DIV: //DIV R1 R2 REGRESULT
                 r1 = Integer.parseInt(instruction.operands[0]);
                 r2 = Integer.parseInt(instruction.operands[1]);
                 resultRegister = Integer.parseInt(instruction.operands[2]);
@@ -325,10 +329,21 @@ public class Simulator {
                 return 0;
             }
             case LD: {// LD R1 MEM_ADDRESS
-                this.registers.set(r1, this.memory.get(memory_address));
+                this.registers.set(r1, this.registers.get(memory_address));
                 this.incrementPC();
                 return 0;
             }
+            case MOVA: {// MOVA R1 R2
+                this.registers.set(r1, this.registers.get(this.registers.get(r2)));
+                this.incrementPC();
+                return 0;
+            }
+            case MOVB: {// MOVB R1 R2
+                this.registers.set(this.registers.get(r1), this.registers.get(r2));
+                this.incrementPC();
+                return 0;
+            }
+
             case ST: {// ST R1 R2
                 int first = this.registers.get(r1);
                 int second = this.registers.get(r2);
