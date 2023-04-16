@@ -6,6 +6,10 @@ import java.util.Scanner;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.zip.CheckedOutputStream;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
+
+
 
 
 enum Opcode {
@@ -44,6 +48,8 @@ public class Simulator {
         }
     }
     public boolean finished = false;
+    public int lastCompletedInstruction = -1;
+    private final Lock pcLock = new ReentrantLock(true);
     public int instructionsCount = 0;
     public int PC = 0;
     public int cycles = 0;
@@ -54,6 +60,10 @@ public class Simulator {
     public Thread fetchThread;
     public Thread decodeThread;
     public Thread issueThread;
+    public Thread alu1Thread;
+    public Thread alu2Thread;
+    public Thread memAccessThread;
+
     public Thread executeThread;
     public Thread clockThread;
     public Checkpoint lastCheckpoint;
@@ -69,8 +79,16 @@ public class Simulator {
         this.decodeThread.interrupt();
         this.decodeThread.stop();
 
-        this.executeThread.interrupt();
-        this.executeThread.stop();
+        this.issueThread.interrupt();
+        this.issueThread.stop();
+
+        this.alu1Thread.interrupt();
+        this.alu2Thread.interrupt();
+        this.memAccessThread.interrupt();
+
+        this.alu1Thread.stop();
+        this.alu2Thread.stop();
+        this.memAccessThread.stop();
     }
     public void initialise() throws InterruptedException {
         //preprocess inputs
@@ -94,37 +112,54 @@ public class Simulator {
         BlockingQueue<String> fetchQueue = new ArrayBlockingQueue<>(5);
         BlockingQueue<Instruction> decodeQueue = new ArrayBlockingQueue<>(5);
         BlockingQueue<ExecutionObj> issueQueue = new ArrayBlockingQueue<>(5);
-        BlockingQueue<ExecutionObj> executeQueue = new ArrayBlockingQueue<>(5);
+        BlockingQueue<ExecutionObj> alu1Queue = new ArrayBlockingQueue<>(100);
+        BlockingQueue<ExecutionObj> alu2Queue = new ArrayBlockingQueue<>(100);
+        BlockingQueue<ExecutionObj> memAccessQueue = new ArrayBlockingQueue<>(100);
+
+
 
         //queues for clock to know to tick again
         BlockingQueue<String> fetchClockQueue = new ArrayBlockingQueue<>(1);
         BlockingQueue<String> decodeClockQueue = new ArrayBlockingQueue<>(1);
         BlockingQueue<String> issueClockQueue = new ArrayBlockingQueue<>(1);
-        BlockingQueue<String> executeClockQueue = new ArrayBlockingQueue<>(1);
+        BlockingQueue<String> alu1ClockQueue = new ArrayBlockingQueue<>(1);
+        BlockingQueue<String> alu2ClockQueue = new ArrayBlockingQueue<>(1);
+        BlockingQueue<String> memAccessClockQueue = new ArrayBlockingQueue<>(1);
+
+
+
 
 
 
         //later on check if other parts have stalled before putting messages in their queue not gonna do this yet as PC doesn't
         //change in a scalar processor when it has stalled.
         //TODO issue stage to different execution units
+        //TODO 2 ALU, 1 memory access, 1 branch predictor.
 
         this.clockThread = new Thread(() -> {
             while (!this.finished) {
                 System.out.println("Clock tick " + this.cycles++);
                 try {
                     fetchQueue.put("Fetch");
+                    alu1ClockQueue.put("tick");
+                    alu2ClockQueue.put("tick");
+                    memAccessClockQueue.put("tick");
                 } catch (InterruptedException e) {
                     e.printStackTrace();
                 }
                 try {
                     String message = fetchClockQueue.take();
                     String message2 = decodeClockQueue.take();
-                    String message3 = executeClockQueue.take();
+                    String message3 = issueClockQueue.take();
+                    String message4 = alu1ClockQueue.take();
+                    String message5 = alu2ClockQueue.take();
+                    String message6 = memAccessClockQueue.take();
                 }
                 catch (Exception e)
                 {
                     System.out.println("error receiving messages in the clock");
                 }
+                System.out.println(this.lastCompletedInstruction);
             }
             System.out.println("clock has broken out of its loop");
             shutdown();
@@ -146,7 +181,7 @@ public class Simulator {
                     }
                     else {
                         this.finished = true;
-                        System.out.println("set finished to true");
+                        System.out.println("set finished to true inside fetch");
                     }
                     fetchClockQueue.put("tick please!");
                 } catch (InterruptedException e) {
@@ -163,7 +198,7 @@ public class Simulator {
                     Instruction instruction = decodeQueue.take();
                     ExecutionObj executionObj = decode(instruction);
                     System.out.println("Decode received message: ");
-                    executeQueue.put(executionObj);
+                    issueQueue.put(executionObj);
                     if(instruction.opcode == Opcode.HALT)
                     {
                         break;
@@ -179,10 +214,54 @@ public class Simulator {
 
         this.issueThread = new Thread(() -> {
            ArrayList<ExecutionObj> instructionsToIssue = new ArrayList<>();
+           int instructionNumber = 0;
             while (!this.finished) {
                 try {
                     ExecutionObj executionObj = issueQueue.take();
+                    executionObj.instructionID = instructionNumber;
+                    System.out.println("issue received a message");
+
+                    //TODO issuing logic.
+                    boolean isAluInstruction = isAluInstruction(executionObj.opcode);
+                    if(isAluInstruction)
+                    {
+                        if(alu1Queue.isEmpty())
+                        {
+                            alu1Queue.put(executionObj);
+                            System.out.println("issued to alu1");
+                        }
+                        else if(alu2Queue.isEmpty())
+                        {
+                            alu2Queue.put(executionObj);
+                            System.out.println("issued to alu2");
+                        }
+                        else {
+                            System.out.println("both alus have a queue...");
+                            int alu1 = alu1Queue.size();
+                            int alu2 = alu2Queue.size();
+                            if(alu1 >= alu2)
+                            {
+                                alu1Queue.put(executionObj);
+                                System.out.println("issued to alu1");
+                            }
+                            else {
+                                alu2Queue.put(executionObj);
+                                System.out.println("issued to alu2");
+                            }
+                        }
+                    }
+                    else {
+                        memAccessQueue.put(executionObj);
+                        System.out.println("issued to memory access");
+                    }
+                    if(executionObj.opcode == Opcode.HALT)
+                    {
+                        break;
+                    }
+                    instructionNumber++;
+                    issueClockQueue.put("Tick please!");
                 }
+
                 catch (InterruptedException e)
                 {
                     e.printStackTrace();
@@ -192,69 +271,187 @@ public class Simulator {
             shutdown();
         });
 
-        this.executeThread = new Thread(() -> {
-            ExecutionState executionState = new ExecutionState(new ExecutionObj(Opcode.HALT, 0,0,0,0,0,0));
+        this.alu1Thread = new Thread(() -> {
+            ExecutionState executionState = new ExecutionState(new ExecutionObj(Opcode.DIV, 0,0,0,0,0,0));
+            boolean finishedCurrentInstruction = true;
+            boolean initialised = false;
             while (!this.finished) {
                 try {
-                    ExecutionObj executionObj = executeQueue.take();
-                    ExecutionObj oldExecutionObj = executionState.executionObj;
-                    if(oldExecutionObj.equals(executionObj))
+                    alu1ClockQueue.take();
+                    ExecutionObj executionObj = executionState.executionObj;
+
+                    if(finishedCurrentInstruction)
                     {
-                        executionState.currentCycleNumber++;
-                        if(executionState.isComplete())
+                        //set boolean after taking message for the first time.
+                        if(alu1Queue.isEmpty())
                         {
+                            //System.out.println("empty queue so ticking!");
+                            alu1ClockQueue.put("tick please!");
+                            continue;
+                        }
+                        finishedCurrentInstruction = false;
+                        executionObj = alu1Queue.take();
+                        initialised = true;
+                        System.out.println("alu1 received message");
+                        executionState = new ExecutionState(executionObj);
+                        executionState.currentCycleNumber++;
+                        if(executionState.isComplete() && initialised && this.lastCompletedInstruction == executionObj.instructionID - 1)
+                        {
+                            finishedCurrentInstruction = true;
                             execute(executionObj);
+                            this.lastCompletedInstruction = executionObj.instructionID;
                         }
                     }
                     else {
-                        executionState = new ExecutionState(executionObj);
                         executionState.currentCycleNumber++;
-                        if(executionState.isComplete())
+                        if(executionState.isComplete() && initialised && this.lastCompletedInstruction == executionObj.instructionID - 1)
                         {
+                            finishedCurrentInstruction = true;
                             execute(executionObj);
+                            this.lastCompletedInstruction = executionObj.instructionID;
                         }
                     }
 
-                    System.out.println("Execution received message");
+
                     if(executionObj.opcode == Opcode.HALT)
                     {
                         break;
                     }
-                    executeClockQueue.put("tick please!");
+                    //System.out.println("alu1 finished one cycle");
+                    alu1ClockQueue.put("tick please!");
                 } catch (InterruptedException e) {
                     e.printStackTrace();
                 }
             }
-            System.out.println("execute has broken out of its loop");
+            System.out.println("alu1 has broken out of its loop");
 
             shutdown();
             //Thread.currentThread().interrupt();
             //executeThread.stop();
         });
+        this.alu2Thread = new Thread(() -> {
+            ExecutionState executionState = new ExecutionState(new ExecutionObj(Opcode.DIV, 0,0,0,0,0,0));
+            boolean finishedCurrentInstruction = true;
+            boolean initialised = false;
+            while (!this.finished) {
+                try {
+                    alu2ClockQueue.take();
+                    ExecutionObj executionObj = executionState.executionObj;
+
+                    if(finishedCurrentInstruction)
+                    {
+                        if(alu2Queue.isEmpty())
+                        {
+                            alu2ClockQueue.put("tick please!");
+                            continue;
+                        }
+                        finishedCurrentInstruction = false;
+                        executionObj = alu2Queue.take();
+                        initialised = true;
+                        System.out.println("alu2 received message");
+                        executionState = new ExecutionState(executionObj);
+                        executionState.currentCycleNumber++;
+                        if(executionState.isComplete() && initialised && this.lastCompletedInstruction == executionObj.instructionID - 1)
+                        {
+                            finishedCurrentInstruction = true;
+                            execute(executionObj);
+                            this.lastCompletedInstruction = executionObj.instructionID;
+                        }
+                    }
+                    else {
+                        executionState.currentCycleNumber++;
+                        if(executionState.isComplete() && initialised && this.lastCompletedInstruction == executionObj.instructionID - 1)
+                        {
+                            finishedCurrentInstruction = true;
+                            execute(executionObj);
+                            this.lastCompletedInstruction = executionObj.instructionID;
+                        }
+                    }
+
+
+                    if(executionObj.opcode == Opcode.HALT)
+                    {
+                        break;
+                    }
+                    //System.out.println("alu2 finished one cycle");
+
+                    alu2ClockQueue.put("tick please!");
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+            System.out.println("alu2 has broken out of its loop");
+            shutdown();
+        });
+        this.memAccessThread = new Thread(() -> {
+            ExecutionState executionState = new ExecutionState(new ExecutionObj(Opcode.DIV, 0,0,0,0,0,0));
+            boolean finishedCurrentInstruction = true;
+            boolean initialised = false;
+            while (!this.finished) {
+                try {
+                    memAccessClockQueue.take();
+                    ExecutionObj executionObj = executionState.executionObj;
+
+                    if(finishedCurrentInstruction)
+                    {
+                        if(memAccessQueue.isEmpty())
+                        {
+                            memAccessClockQueue.put("tick please!");
+                            continue;
+                        }
+                        finishedCurrentInstruction = false;
+                        executionObj = memAccessQueue.take();
+                        initialised = true;
+                        System.out.println("memory access received message");
+                        executionState = new ExecutionState(executionObj);
+                        executionState.currentCycleNumber++;
+                        if(executionState.isComplete() && initialised && this.lastCompletedInstruction == executionObj.instructionID - 1)
+                        {
+                            finishedCurrentInstruction = true;
+                            execute(executionObj);
+                            this.lastCompletedInstruction = executionObj.instructionID;
+                        }
+                    }
+                    else {
+                        executionState.currentCycleNumber++;
+                        if(executionState.isComplete() && initialised && this.lastCompletedInstruction == executionObj.instructionID - 1)
+                        {
+                            finishedCurrentInstruction = true;
+                            execute(executionObj);
+                            this.lastCompletedInstruction = executionObj.instructionID;
+                        }
+                    }
+
+
+                    if(executionObj.opcode == Opcode.HALT)
+                    {
+                        break;
+                    }
+                    //System.out.println("mem access finished one cycle");
+                    memAccessClockQueue.put("tick please!");
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+            System.out.println("memory access has broken out of its loop");
+            shutdown();
+        });
 
         clockThread.start();
         fetchThread.start();
         decodeThread.start();
-        executeThread.start();
+        issueThread.start();
+        alu1Thread.start();
+        alu2Thread.start();
+        memAccessThread.start();
 
         clockThread.join();
         fetchThread.join();
         decodeThread.join();
-        executeThread.join();
-    }
-
-
-    public void fetch(){
-        if (this.PC < this.instructions.size())
-        {
-            decode(this.instructions.get(this.PC));
-        }
-        else {
-            System.out.println("invalid program counter");
-            this.finished = true;
-            System.out.println("set finished to true");
-        }
-
+        issueThread.join();
+        alu1Thread.join();
+        alu2Thread.join();
+        memAccessThread.join();
     }
 
     public ExecutionObj issue(ExecutionObj executionObj)
@@ -337,8 +534,9 @@ public class Simulator {
 
     }
 
-    public int execute(ExecutionObj executionObj){
+    public void execute(ExecutionObj executionObj){
         System.out.println("executing");
+        int newPC = 0;
         Opcode opcode = executionObj.opcode;
         int constant = executionObj.constant;
         int  resultRegister = executionObj.resultRegister;
@@ -350,27 +548,27 @@ public class Simulator {
         this.instructionsCount++;
         switch(opcode){
             case BR: {// BR ADDRESS
-                this.PC = target_address;
-                return 0;
+                newPC = target_address;
+                break;
             }
             case BZ: {// BZ R1 ADDRESS
                 if (this.registers.get(r1) == 0)
-                    this.PC = target_address;
+                    newPC = target_address;
                 else
-                    this.incrementPC();
-                return 0;
+                    newPC = this.PC + 1;;
+                break;
             }
             case LD: {// LD R1 MEM_ADDRESS
                 this.registers.set(r1, this.memory.get(memory_address));
-                this.incrementPC();
-                return 0;
+                newPC = this.PC + 1;;
+                break;
             }
             case ST: {// ST R1 R2
                 int first = this.registers.get(r1);
                 int second = this.registers.get(r2);
                 this.memory.set(first, second);
-                this.incrementPC();
-                return 0;
+                newPC = this.PC + 1;;
+                break;
             }
             case ADD: {// ADD R1 R2 REGRESULT
                 int first = this.registers.get(r1);
@@ -378,15 +576,15 @@ public class Simulator {
                 this.registers.set(resultRegister, (first + second));
                 System.out.println("added registers :- " + r1 + " and " + r2 + " to get " + this.registers.get(resultRegister));
 
-                this.incrementPC();
-                return 0;
+                newPC = this.PC + 1;;
+                break;
             }
             case SUB: {//SUB R1 R2 REGRESULT
                 int first = this.registers.get(r1);
                 int second = this.registers.get(r2);
                 this.registers.set(resultRegister, first - second);
-                this.incrementPC();
-                return 0;
+                newPC = this.PC + 1;;
+                break;
             }
 
             case CMP: {//CMP R1 R2 REGRESULT
@@ -400,64 +598,69 @@ public class Simulator {
                 } else {
                     this.registers.set(resultRegister, -1);
                 }
-                this.incrementPC();
+                newPC = this.PC + 1;;
 
-                return 0;
+                break;
             }
             case AND: {//AND R1 R2 REGRESULT
                 int first = this.registers.get(r1);
                 int second = this.registers.get(r2);
                 this.registers.set(resultRegister, first & second);
 
-                return 0;
+                break;
             }
             case LDI: {//LDI REGRESULT CONST
                 this.registers.set(resultRegister, constant);
                 System.out.println("set register :- " + resultRegister + " to " + constant);
-                this.incrementPC();
-                return 0;
+                newPC = this.PC + 1;;
+                break;
             }
             case MOV: {//MOV R1 REGRESULT
                 int first = this.registers.get(r1);
                 this.registers.set(resultRegister, first);
-                return 0;
+                break;
             }
             case MUL: {//MUL R1 R2 REGRESULT
                 int first = this.registers.get(r1);
                 int second = this.registers.get(r2);
                 this.registers.set(resultRegister, first * second);
-                return 0;
+                break;
             }
             case NOT: {//NOT R1 REGRESULT
                 int first = this.registers.get(r1);
                 this.registers.set(resultRegister, ~first);
-                return 0;
+                break;
             }
             case ADDI: {//ADD R1 CONST REGRESULT
                 int value = this.registers.get(r1);
                 this.registers.set(resultRegister, value + constant);
-                this.incrementPC();
-                return 0;
+                newPC = this.PC + 1;;
+                break;
             }
             case BLEQ: {//BLEQ R1 R2 ADDRESS
                 int first = this.registers.get(r1);
                 int second = this.registers.get(r2);
                 if (first <= second) {
-                    this.PC = target_address;
+                    newPC = target_address;
                 } else {
-                    this.incrementPC();
+                    newPC = this.PC + 1;;
                 }
-                return 0;
+                break;
             }
             case HALT: {// HALT
                 this.finished = true;
-                System.out.println("set finished to true");
-                return 0;
+                System.out.println("set finished to true inside of execute");
+                System.out.println(executionObj.opcode);
+                break;
             }
             default:
-                System.out.println("Error, unknown OPCODE");
-                return 1;
+                System.out.println("Error, unknown OPCODE in execute");
+                break;
         }
+        //TODO update PC here.
+        pcLock.lock();
+        this.PC = newPC;
+        pcLock.unlock();
     }
 
     public int alu(ExecutionObj executionObj)
@@ -605,6 +808,39 @@ public class Simulator {
 
 
     }
+
+
+
+    private boolean isAluInstruction(Opcode opcode) {
+        System.out.println("entered into alu function");
+        switch(opcode){
+            case DIV:
+            case CMP:
+            case MUL:
+            case BZ:
+            case BLEQ:
+            case BR:
+            case ADD:
+            case SUB:
+            case AND:
+            case NOT:
+            case ADDI:
+            case MOV:
+            case LDI:
+             {
+                return true;
+            }
+            case LD:
+            case ST:
+            case HALT:{
+                return false;
+            }
+            default:
+                System.out.println("Error, unknown OPCODE in issue assign");
+                return false;
+        }
+    }
+
 
 
 

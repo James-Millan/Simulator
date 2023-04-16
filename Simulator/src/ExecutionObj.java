@@ -17,6 +17,7 @@ public class ExecutionObj {
     public int r2;
     public int target_address;
     public int memory_address;
+    public int instructionID;
 
 
     @Override

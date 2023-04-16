@@ -15,6 +15,4 @@ public class Main {
            System.out.println("register " + i + " :- "  + simulator.registers.get(i));
        }
     }
-
-
 }
