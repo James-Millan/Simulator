@@ -52,6 +52,7 @@ public class Simulator {
     private final Lock pcLock = new ReentrantLock(true);
     public int instructionsCount = 0;
     public int PC = 0;
+    public boolean isStalled = false;
     public int cycles = 0;
     public ArrayList<ExecutionObj> waitingInstructions = new ArrayList<>();
     public ArrayList<ExecutionObj> readyInstructions = new ArrayList<>();
@@ -59,41 +60,14 @@ public class Simulator {
     public ArrayList<Integer> registerFile = new ArrayList<>();
     public ArrayList<Integer> memory = new ArrayList<>();
     public ArrayList<Instruction> instructions = new ArrayList<>();
-    public Thread fetchThread;
-    public Thread decodeThread;
-    public Thread issueThread;
-    public Thread alu1Thread;
-    public Thread alu2Thread;
-    public Thread memAccessThread;
 
-    public Thread executeThread;
-    public Thread clockThread;
+    public Instruction fetchedInstruction = null;
+    public ExecutionObj decodedInstruction = null;
+
+    public ExecutionState executionState = null;
     public Checkpoint lastCheckpoint;
 
-
-    public void shutdown() {
-        this.clockThread.interrupt();
-        this.clockThread.stop();
-
-        this.fetchThread.interrupt();
-        this.fetchThread.stop();
-
-        this.decodeThread.interrupt();
-        this.decodeThread.stop();
-
-        this.issueThread.interrupt();
-        this.issueThread.stop();
-
-        this.alu1Thread.interrupt();
-        this.alu2Thread.interrupt();
-        this.memAccessThread.interrupt();
-
-        this.alu1Thread.stop();
-        this.alu2Thread.stop();
-        this.memAccessThread.stop();
-    }
-
-    public void initialise() throws InterruptedException {
+    public void initialise() {
         //preprocess inputs
         try {
             File myFile = new File("resources/input.txt");
@@ -110,455 +84,284 @@ public class Simulator {
         } catch (Exception e) {
             System.out.println("please name the input file:- \"input.txt\"");
         }
-
-        BlockingQueue<String> fetchQueue = new ArrayBlockingQueue<>(5);
-        BlockingQueue<Instruction> decodeQueue = new ArrayBlockingQueue<>(5);
-        BlockingQueue<ExecutionObj> issueQueue = new ArrayBlockingQueue<>(5);
-        BlockingQueue<ExecutionObj> alu1Queue = new ArrayBlockingQueue<>(100);
-        BlockingQueue<ExecutionObj> alu2Queue = new ArrayBlockingQueue<>(100);
-        BlockingQueue<ExecutionObj> memAccessQueue = new ArrayBlockingQueue<>(100);
-
-
-        //queues for clock to know to tick again
-        BlockingQueue<String> fetchClockQueue = new ArrayBlockingQueue<>(1);
-        BlockingQueue<String> decodeClockQueue = new ArrayBlockingQueue<>(1);
-        BlockingQueue<String> issueClockQueue = new ArrayBlockingQueue<>(1);
-        BlockingQueue<String> alu1ClockQueue = new ArrayBlockingQueue<>(1);
-        BlockingQueue<String> alu2ClockQueue = new ArrayBlockingQueue<>(1);
-        BlockingQueue<String> memAccessClockQueue = new ArrayBlockingQueue<>(1);
+        clock();
 
 
         //later on check if other parts have stalled before putting messages in their queue not gonna do this yet as PC doesn't
         //change in a scalar processor when it has stalled.
         // issue stage to different execution units
         //TODO update execution threads now... Remove executed instruction from dependencies. If dependency count goes to 0 move to ready.
-        //TODO 2 ALU, 1 memory access, 1 branch predictor.
-
-        this.clockThread = new Thread(() -> {
-            while (!this.finished) {
-                System.out.println("Clock tick " + this.cycles++);
-                try {
-                    fetchQueue.put("Fetch");
-                    alu1ClockQueue.put("tick");
-                    alu2ClockQueue.put("tick");
-                    memAccessClockQueue.put("tick");
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                }
-                try {
-                    String message = fetchClockQueue.take();
-                    String message2 = decodeClockQueue.take();
-                    String message3 = issueClockQueue.take();
-                    String message4 = alu1ClockQueue.take();
-                    String message5 = alu2ClockQueue.take();
-                    String message6 = memAccessClockQueue.take();
-                } catch (Exception e) {
-                    System.out.println("error receiving messages in the clock");
-                }
-                System.out.println(this.lastCompletedInstruction + " printing");
-            }
-            System.out.println("clock has broken out of its loop");
-            shutdown();
-        });
-
-        this.fetchThread = new Thread(() -> {
-            while (!this.finished) {
-                try {
-                    String message = fetchQueue.take();
-                    System.out.println("Fetching... " + message);
-                    if (this.PC < this.instructions.size()) {
-                        Instruction instruction = this.instructions.get(this.PC);
-                        decodeQueue.put(instruction);
-                        if (instruction.opcode == Opcode.HALT) {
-                            break;
-                        }
-                    } else {
-                        this.finished = true;
-                        System.out.println("set finished to true inside fetch");
-                    }
-                    fetchClockQueue.put("tick please!");
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                }
-            }
-            System.out.println("fetch has broken out of its loop");
-            shutdown();
-        });
-
-        this.decodeThread = new Thread(() -> {
-            while (!this.finished) {
-                try {
-                    Instruction instruction = decodeQueue.take();
-                    ExecutionObj executionObj = decode(instruction);
-                    System.out.println("Decode received message: ");
-                    issueQueue.put(executionObj);
-                    if (instruction.opcode == Opcode.HALT) {
-                        break;
-                    }
-                    decodeClockQueue.put("tick please!");
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                }
-            }
-            System.out.println("decode has broken out of its loop");
-            shutdown();
-        });
-
-        this.issueThread = new Thread(() -> {
-            ArrayList<ExecutionObj> instructionsToIssue = new ArrayList<>();
-            int instructionNumber = 0;
-            while (!this.finished) {
-                try {
-                    ExecutionObj executionObj = issueQueue.take();
-                    executionObj.instructionID = instructionNumber;
-                    System.out.println("issue received a message");
-
-                    //check for dependencies
-                    for (int i = this.PC; i < this.instructions.size(); i++) {
-                        if (executionObj.hasDependency(decode(instructions.get(i)))) {
-                            executionObj.dependencies.add(i);
-                        }
-                    }
-                    boolean readyToIssue = false;
-                    if(executionObj.dependencies.size() > 0)
-                    {
-                        //add it to the list of waiting executionObjs.
-                        this.waitingInstructions.add(executionObj);
-                        if(readyInstructions.size() > 0)
-                        {
-                            executionObj = readyInstructions.get(0);
-                            this.readyInstructions.remove(0);
-                            readyToIssue = true;
-                        }
-
-                    }
-                    else {
-                        this.readyInstructions.add(executionObj);
-                        readyToIssue = true;
-                    }
-                    //TODO remove dependencies from list when they are executed.
-                    //TODO issuing logic.
-                    if(readyToIssue) {
-                        boolean isAluInstruction = isAluInstruction(executionObj.opcode);
-                        if (isAluInstruction) {
-                            if (alu1Queue.isEmpty()) {
-                                alu1Queue.put(executionObj);
-                                System.out.println("issued to alu1");
-                            } else if (alu2Queue.isEmpty()) {
-                                alu2Queue.put(executionObj);
-                                System.out.println("issued to alu2");
-                            } else {
-                                System.out.println("both alus have a queue...");
-                                int alu1 = alu1Queue.size();
-                                int alu2 = alu2Queue.size();
-                                if (alu1 >= alu2) {
-                                    alu1Queue.put(executionObj);
-                                    System.out.println("issued to alu1");
-                                } else {
-                                    alu2Queue.put(executionObj);
-                                    System.out.println("issued to alu2");
-                                }
-                            }
-                        } else {
-                            memAccessQueue.put(executionObj);
-                            System.out.println("issued to memory access");
-                        }
-                    }
-                    if (executionObj.opcode == Opcode.HALT) {
-                        break;
-                    }
-                    issueClockQueue.put("Tick please!");
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                }
-            }
-            System.out.println("issue has broken out of its loop");
-            shutdown();
-        });
-
-        this.alu1Thread = new Thread(() -> {
-            ExecutionState executionState = new ExecutionState(new ExecutionObj(Opcode.DIV, 0, 0, 0, 0, 0, 0));
-            boolean finishedCurrentInstruction = true;
-            boolean initialised = false;
-            while (!this.finished) {
-                try {
-                    alu1ClockQueue.take();
-                    ExecutionObj executionObj = executionState.executionObj;
-
-                    if (finishedCurrentInstruction) {
-                        //set boolean after taking message for the first time.
-                        if (alu1Queue.isEmpty()) {
-                            //System.out.println("empty queue so ticking!");
-                            alu1ClockQueue.put("tick please!");
-                            continue;
-                        }
-                        finishedCurrentInstruction = false;
-                        executionObj = alu1Queue.take();
-                        initialised = true;
-                        System.out.println("alu1 received message");
-                        executionState = new ExecutionState(executionObj);
-                        executionState.currentCycleNumber++;
-                        if (executionState.isComplete()) {
-                            finishedCurrentInstruction = true;
-                            execute(executionObj);
-                            for (int i = 0; i < this.waitingInstructions.size(); i++)
-                            {
-                                ExecutionObj execObj = this.waitingInstructions.get(i);
-                                for(int j = 0; j < execObj.dependencies.size(); j++)
-                                {
-                                    if(execObj.dependencies.get(j) == executionObj.instructionID)
-                                    {
-                                        //remove the integer from the list not the index.
-                                        execObj.dependencies.remove(j);
-                                        j--;
-                                        if(execObj.dependencies.size() == 0)
-                                        {
-                                            this.readyInstructions.add(execObj);
-                                            this.waitingInstructions.remove(execObj);
-                                            i--;
-                                        }
-                                    }
-                                }
-                            }
-                            this.lastCompletedInstruction = executionObj.instructionID;
-                        }
-                    } else {
-                        executionState.currentCycleNumber++;
-                        if (executionState.isComplete()) {
-                            finishedCurrentInstruction = true;
-                            execute(executionObj);
-                            for (int i = 0; i < this.waitingInstructions.size(); i++)
-                            {
-                               ExecutionObj execObj = this.waitingInstructions.get(i);
-                                for(int j = 0; j < execObj.dependencies.size(); j++)
-                                {
-                                    if(execObj.dependencies.get(j) == executionObj.instructionID)
-                                    {
-                                        //remove the integer from the list not the index.
-                                        execObj.dependencies.remove(j);
-                                        j--;
-                                        if(execObj.dependencies.size() == 0)
-                                        {
-                                            this.readyInstructions.add(execObj);
-                                            this.waitingInstructions.remove(execObj);
-                                            i--;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if (executionObj.opcode == Opcode.HALT) {
-                        break;
-                    }
-                    //System.out.println("alu1 finished one cycle");
-                    alu1ClockQueue.put("tick please!");
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                }
-            }
-            System.out.println("alu1 has broken out of its loop");
-
-            shutdown();
-            //Thread.currentThread().interrupt();
-            //executeThread.stop();
-        });
-        this.alu2Thread = new Thread(() -> {
-            ExecutionState executionState = new ExecutionState(new ExecutionObj(Opcode.DIV, 0, 0, 0, 0, 0, 0));
-            boolean finishedCurrentInstruction = true;
-            boolean initialised = false;
-            while (!this.finished) {
-                try {
-                    alu2ClockQueue.take();
-                    ExecutionObj executionObj = executionState.executionObj;
-
-                    if (finishedCurrentInstruction) {
-                        if (alu2Queue.isEmpty()) {
-                            alu2ClockQueue.put("tick please!");
-                            continue;
-                        }
-                        finishedCurrentInstruction = false;
-                        executionObj = alu2Queue.take();
-                        initialised = true;
-                        System.out.println("alu2 received message");
-                        executionState = new ExecutionState(executionObj);
-                        executionState.currentCycleNumber++;
-                        if (executionState.isComplete()) {
-                            finishedCurrentInstruction = true;
-                            execute(executionObj);
-                            for (int i = 0; i < this.waitingInstructions.size(); i++)
-                            {
-                                ExecutionObj execObj = this.waitingInstructions.get(i);
-                                for(int j = 0; j < execObj.dependencies.size(); j++)
-                                {
-                                    if(execObj.dependencies.get(j) == executionObj.instructionID)
-                                    {
-                                        //remove the integer from the list not the index.
-                                        execObj.dependencies.remove(j);
-                                        j--;
-                                        if(execObj.dependencies.size() == 0)
-                                        {
-                                            this.readyInstructions.add(execObj);
-                                            this.waitingInstructions.remove(execObj);
-                                            i--;
-                                        }
-                                    }
-                                }
-                            }
-                            this.lastCompletedInstruction = executionObj.instructionID;
-                        }
-                    } else {
-                        executionState.currentCycleNumber++;
-                        if (executionState.isComplete()) {
-                            finishedCurrentInstruction = true;
-                            execute(executionObj);
-                            for (int i = 0; i < this.waitingInstructions.size(); i++)
-                            {
-                                ExecutionObj execObj = this.waitingInstructions.get(i);
-                                for(int j = 0; j < execObj.dependencies.size(); j++)
-                                {
-                                    if(execObj.dependencies.get(j) == executionObj.instructionID)
-                                    {
-                                        //remove the integer from the list not the index.
-                                        execObj.dependencies.remove(j);
-                                        j--;
-                                        if(execObj.dependencies.size() == 0)
-                                        {
-                                            this.readyInstructions.add(execObj);
-                                            this.waitingInstructions.remove(execObj);
-                                            i--;
-                                        }
-                                    }
-                                }
-                            }
-                            this.lastCompletedInstruction = executionObj.instructionID;
-                        }
-                    }
+        //TODO 2 ALU, 1 memory access, 1 branch predictor
 
 
-                    if (executionObj.opcode == Opcode.HALT) {
-                        break;
-                    }
-                    //System.out.println("alu2 finished one cycle");
 
-                    alu2ClockQueue.put("tick please!");
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                }
-            }
-            System.out.println("alu2 has broken out of its loop");
-            shutdown();
-        });
-        this.memAccessThread = new Thread(() -> {
-            ExecutionState executionState = new ExecutionState(new ExecutionObj(Opcode.DIV, 0, 0, 0, 0, 0, 0));
-            boolean finishedCurrentInstruction = true;
-            boolean initialised = false;
-            while (!this.finished) {
-                try {
-                    memAccessClockQueue.take();
-                    ExecutionObj executionObj = executionState.executionObj;
-
-                    if (finishedCurrentInstruction) {
-                        if (memAccessQueue.isEmpty()) {
-                            memAccessClockQueue.put("tick please!");
-                            continue;
-                        }
-                        finishedCurrentInstruction = false;
-                        executionObj = memAccessQueue.take();
-                        initialised = true;
-                        System.out.println("memory access received message");
-                        executionState = new ExecutionState(executionObj);
-                        executionState.currentCycleNumber++;
-                        if (executionState.isComplete()) {
-                            finishedCurrentInstruction = true;
-                            execute(executionObj);
-                            for (int i = 0; i < this.waitingInstructions.size(); i++)
-                            {
-                                ExecutionObj execObj = this.waitingInstructions.get(i);
-                                for(int j = 0; j < execObj.dependencies.size(); j++)
-                                {
-                                    if(execObj.dependencies.get(j) == executionObj.instructionID)
-                                    {
-                                        //remove the integer from the list not the index.
-                                        execObj.dependencies.remove(j);
-                                        j--;
-                                        if(execObj.dependencies.size() == 0)
-                                        {
-                                            this.readyInstructions.add(execObj);
-                                            this.waitingInstructions.remove(execObj);
-                                            i--;
-                                        }
-                                    }
-                                }
-                            }
-                            this.lastCompletedInstruction = executionObj.instructionID;
-                        }
-                    } else {
-                        executionState.currentCycleNumber++;
-                        if (executionState.isComplete()) {
-                            finishedCurrentInstruction = true;
-                            execute(executionObj);
-                            for (int i = 0; i < this.waitingInstructions.size(); i++)
-                            {
-                                ExecutionObj execObj = this.waitingInstructions.get(i);
-                                for(int j = 0; j < execObj.dependencies.size(); j++)
-                                {
-                                    if(execObj.dependencies.get(j) == executionObj.instructionID)
-                                    {
-                                        //remove the integer from the list not the index.
-                                        execObj.dependencies.remove(j);
-                                        j--;
-                                        if(execObj.dependencies.size() == 0)
-                                        {
-                                            this.readyInstructions.add(execObj);
-                                            this.waitingInstructions.remove(execObj);
-                                            i--;
-                                        }
-                                    }
-                                }
-                            }
-                            this.lastCompletedInstruction = executionObj.instructionID;
-                        }
-                    }
-
-
-                    if (executionObj.opcode == Opcode.HALT) {
-                        break;
-                    }
-                    //System.out.println("mem access finished one cycle");
-                    memAccessClockQueue.put("tick please!");
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                }
-            }
-            System.out.println("memory access has broken out of its loop");
-            shutdown();
-        });
-
-        clockThread.start();
-        fetchThread.start();
-        decodeThread.start();
-        issueThread.start();
-        alu1Thread.start();
-        alu2Thread.start();
-        memAccessThread.start();
-
-        clockThread.join();
-        fetchThread.join();
-        decodeThread.join();
-        issueThread.join();
-        alu1Thread.join();
-        alu2Thread.join();
-        memAccessThread.join();
+//        this.alu1Thread = new Thread(() -> {
+//            ExecutionState executionState = new ExecutionState(new ExecutionObj(Opcode.DIV, 0, 0, 0, 0, 0, 0));
+//            boolean finishedCurrentInstruction = true;
+//            boolean initialised = false;
+//            while (!this.finished) {
+//                try {
+//                    alu1ClockQueue.take();
+//                    ExecutionObj executionObj = executionState.executionObj;
+//
+//                    if (finishedCurrentInstruction) {
+//                        //set boolean after taking message for the first time.
+//                        if (alu1Queue.isEmpty()) {
+//                            //System.out.println("empty queue so ticking!");
+//                            alu1ClockQueue.put("tick please!");
+//                            continue;
+//                        }
+//                        finishedCurrentInstruction = false;
+//                        executionObj = alu1Queue.take();
+//                        initialised = true;
+//                        System.out.println("alu1 received message");
+//                        executionState = new ExecutionState(executionObj);
+//                        executionState.currentCycleNumber++;
+//                        if (executionState.isComplete()) {
+//                            finishedCurrentInstruction = true;
+//                            execute(executionObj);
+//                            for (int i = 0; i < this.waitingInstructions.size(); i++) {
+//                                ExecutionObj execObj = this.waitingInstructions.get(i);
+//                                for (int j = 0; j < execObj.dependencies.size(); j++) {
+//                                    if (execObj.dependencies.get(j) == executionObj.instructionID) {
+//                                        //remove the integer from the list not the index.
+//                                        execObj.dependencies.remove(j);
+//                                        j--;
+//                                        if (execObj.dependencies.size() == 0) {
+//                                            this.readyInstructions.add(execObj);
+//                                            this.waitingInstructions.remove(execObj);
+//                                            i--;
+//                                        }
+//                                    }
+//                                }
+//                            }
+//                            this.lastCompletedInstruction = executionObj.instructionID;
+//                        }
+//                    } else {
+//                        executionState.currentCycleNumber++;
+//                        if (executionState.isComplete()) {
+//                            finishedCurrentInstruction = true;
+//                            execute(executionObj);
+//                            for (int i = 0; i < this.waitingInstructions.size(); i++) {
+//                                ExecutionObj execObj = this.waitingInstructions.get(i);
+//                                for (int j = 0; j < execObj.dependencies.size(); j++) {
+//                                    if (execObj.dependencies.get(j) == executionObj.instructionID) {
+//                                        //remove the integer from the list not the index.
+//                                        execObj.dependencies.remove(j);
+//                                        j--;
+//                                        if (execObj.dependencies.size() == 0) {
+//                                            this.readyInstructions.add(execObj);
+//                                            this.waitingInstructions.remove(execObj);
+//                                            i--;
+//                                        }
+//                                    }
+//                                }
+//                            }
+//                        }
+//                    }
+//                    if (executionObj.opcode == Opcode.HALT) {
+//                        break;
+//                    }
+//                    //System.out.println("alu1 finished one cycle");
+//                    alu1ClockQueue.put("tick please!");
+//                } catch (InterruptedException e) {
+//                    e.printStackTrace();
+//                }
+//            }
+//            System.out.println("alu1 has broken out of its loop");
+//
+//            shutdown();
+//            //Thread.currentThread().interrupt();
+//            //executeThread.stop();
+//        });
+//        this.alu2Thread = new Thread(() -> {
+//            ExecutionState executionState = new ExecutionState(new ExecutionObj(Opcode.DIV, 0, 0, 0, 0, 0, 0));
+//            boolean finishedCurrentInstruction = true;
+//            boolean initialised = false;
+//            while (!this.finished) {
+//                try {
+//                    alu2ClockQueue.take();
+//                    ExecutionObj executionObj = executionState.executionObj;
+//
+//                    if (finishedCurrentInstruction) {
+//                        if (alu2Queue.isEmpty()) {
+//                            alu2ClockQueue.put("tick please!");
+//                            continue;
+//                        }
+//                        finishedCurrentInstruction = false;
+//                        executionObj = alu2Queue.take();
+//                        initialised = true;
+//                        System.out.println("alu2 received message");
+//                        executionState = new ExecutionState(executionObj);
+//                        executionState.currentCycleNumber++;
+//                        if (executionState.isComplete()) {
+//                            finishedCurrentInstruction = true;
+//                            execute(executionObj);
+//                            for (int i = 0; i < this.waitingInstructions.size(); i++) {
+//                                ExecutionObj execObj = this.waitingInstructions.get(i);
+//                                for (int j = 0; j < execObj.dependencies.size(); j++) {
+//                                    if (execObj.dependencies.get(j) == executionObj.instructionID) {
+//                                        //remove the integer from the list not the index.
+//                                        execObj.dependencies.remove(j);
+//                                        j--;
+//                                        if (execObj.dependencies.size() == 0) {
+//                                            this.readyInstructions.add(execObj);
+//                                            this.waitingInstructions.remove(execObj);
+//                                            i--;
+//                                        }
+//                                    }
+//                                }
+//                            }
+//                            this.lastCompletedInstruction = executionObj.instructionID;
+//                        }
+//                    } else {
+//                        executionState.currentCycleNumber++;
+//                        if (executionState.isComplete()) {
+//                            finishedCurrentInstruction = true;
+//                            execute(executionObj);
+//                            for (int i = 0; i < this.waitingInstructions.size(); i++) {
+//                                ExecutionObj execObj = this.waitingInstructions.get(i);
+//                                for (int j = 0; j < execObj.dependencies.size(); j++) {
+//                                    if (execObj.dependencies.get(j) == executionObj.instructionID) {
+//                                        //remove the integer from the list not the index.
+//                                        execObj.dependencies.remove(j);
+//                                        j--;
+//                                        if (execObj.dependencies.size() == 0) {
+//                                            this.readyInstructions.add(execObj);
+//                                            this.waitingInstructions.remove(execObj);
+//                                            i--;
+//                                        }
+//                                    }
+//                                }
+//                            }
+//                            this.lastCompletedInstruction = executionObj.instructionID;
+//                        }
+//                    }
+//
+//
+//                    if (executionObj.opcode == Opcode.HALT) {
+//                        break;
+//                    }
+//                    //System.out.println("alu2 finished one cycle");
+//
+//                    alu2ClockQueue.put("tick please!");
+//                } catch (InterruptedException e) {
+//                    e.printStackTrace();
+//                }
+//            }
+//            System.out.println("alu2 has broken out of its loop");
+//            shutdown();
+//        });
+//        this.memAccessThread = new Thread(() -> {
+//            ExecutionState executionState = new ExecutionState(new ExecutionObj(Opcode.DIV, 0, 0, 0, 0, 0, 0));
+//            boolean finishedCurrentInstruction = true;
+//            boolean initialised = false;
+//            while (!this.finished) {
+//                try {
+//                    memAccessClockQueue.take();
+//                    ExecutionObj executionObj = executionState.executionObj;
+//
+//                    if (finishedCurrentInstruction) {
+//                        if (memAccessQueue.isEmpty()) {
+//                            memAccessClockQueue.put("tick please!");
+//                            continue;
+//                        }
+//                        finishedCurrentInstruction = false;
+//                        executionObj = memAccessQueue.take();
+//                        initialised = true;
+//                        System.out.println("memory access received message");
+//                        executionState = new ExecutionState(executionObj);
+//                        executionState.currentCycleNumber++;
+//                        if (executionState.isComplete()) {
+//                            finishedCurrentInstruction = true;
+//                            execute(executionObj);
+//                            for (int i = 0; i < this.waitingInstructions.size(); i++) {
+//                                ExecutionObj execObj = this.waitingInstructions.get(i);
+//                                for (int j = 0; j < execObj.dependencies.size(); j++) {
+//                                    if (execObj.dependencies.get(j) == executionObj.instructionID) {
+//                                        //remove the integer from the list not the index.
+//                                        execObj.dependencies.remove(j);
+//                                        j--;
+//                                        if (execObj.dependencies.size() == 0) {
+//                                            this.readyInstructions.add(execObj);
+//                                            this.waitingInstructions.remove(execObj);
+//                                            i--;
+//                                        }
+//                                    }
+//                                }
+//                            }
+//                            this.lastCompletedInstruction = executionObj.instructionID;
+//                        }
+//                    } else {
+//                        executionState.currentCycleNumber++;
+//                        if (executionState.isComplete()) {
+//                            finishedCurrentInstruction = true;
+//                            execute(executionObj);
+//                            for (int i = 0; i < this.waitingInstructions.size(); i++) {
+//                                ExecutionObj execObj = this.waitingInstructions.get(i);
+//                                for (int j = 0; j < execObj.dependencies.size(); j++) {
+//                                    if (execObj.dependencies.get(j) == executionObj.instructionID) {
+//                                        //remove the integer from the list not the index.
+//                                        execObj.dependencies.remove(j);
+//                                        j--;
+//                                        if (execObj.dependencies.size() == 0) {
+//                                            this.readyInstructions.add(execObj);
+//                                            this.waitingInstructions.remove(execObj);
+//                                            i--;
+//                                        }
+//                                    }
+//                                }
+//                            }
+//                            this.lastCompletedInstruction = executionObj.instructionID;
+//                        }
+//                    }
+//
+//
+//                    if (executionObj.opcode == Opcode.HALT) {
+//                        break;
+//                    }
+//                    //System.out.println("mem access finished one cycle");
+//                    memAccessClockQueue.put("tick please!");
+//                } catch (InterruptedException e) {
+//                    e.printStackTrace();
+//                }
+//            }
+//            System.out.println("memory access has broken out of its loop");
+//            shutdown();
+//        });
     }
 
-    public ExecutionObj issue(ExecutionObj executionObj) {
-        //TODO switch statement based on the opcode, can just merge with decode unit tbh.
-        return null;
+    public void clock()
+    {
+        while(!this.finished)
+        {
+            if(!this.isStalled) {
+                this.fetchedInstruction = fetch();
+                this.decodedInstruction = decode(this.fetchedInstruction);
+                this.readyInstructions.add(issue(this.decodedInstruction));
+            }
+            execute(this.readyInstructions.get(0));
+            this.readyInstructions.remove(0);
+            this.cycles++;
+        }
+    }
+
+    public Instruction fetch() {
+        System.out.println("fetching");
+
+        Instruction instruction = this.instructions.get(this.PC);
+        System.out.println(instruction.opcode);
+         return instruction;
+
+//        if (instruction.opcode == Opcode.HALT) {
+//            this.finished = true;
+//            System.out.println("set finished to true inside fetch");
+//        }
+
     }
 
     public ExecutionObj decode(Instruction instruction) {
-        //System.out.println("decode");
+        System.out.println("decode");
         //Opcode opcode = Opcode.HALT;
         int r1 = -1;
         int r2 = -1;
@@ -640,6 +443,54 @@ public class Simulator {
 
     }
 
+
+    public ExecutionObj issue(ExecutionObj executionObj) {
+        //TODO switch statement based on the opcode, can just merge with decode unit tbh.
+        //TODO remove dependencies from list when they are executed.
+        //TODO issuing logic.
+        System.out.println("issue");
+
+        boolean isAluInstruction = isAluInstruction(executionObj.opcode);
+        return executionObj;
+    }
+
+    public void executionUnit(ExecutionState executionState)
+    {
+        if(executionState == null)
+        {
+            executionState = new ExecutionState(this.readyInstructions.get(0));
+            this.readyInstructions.remove(0);
+        }
+        else {
+            executionState = this.executionState;
+        }
+        ExecutionObj executionObj = executionState.executionObj;
+        if (executionState.isComplete()) {
+            //take a new object from the queue. (reservation station)
+            this.executionState = new ExecutionState(this.readyInstructions.get(0));
+            this.readyInstructions.remove(0);
+            executionState = this.executionState;
+            executionState.currentCycleNumber++;
+            if (executionState.isComplete()) {
+                execute(executionObj);
+                this.isStalled = false;
+
+            }
+        } else {
+            this.isStalled = true;
+            this.executionState = executionState;
+            executionState.currentCycleNumber++;
+            if (executionState.isComplete()) {
+                execute(executionObj);
+                this.isStalled = false;
+            }
+        }
+        if (executionObj.opcode == Opcode.HALT) {
+            this.finished = true;
+            System.out.println("set finished to true in execution unit");
+        }
+    }
+
     public void execute(ExecutionObj executionObj) {
         System.out.println("executing");
         int newPC = 0;
@@ -652,8 +503,8 @@ public class Simulator {
         int memory_address = executionObj.memory_address;
         //TODO this should send a pair to set in memory to writeback
         this.instructionsCount++;
-        switch (opcode) {
-            case BR: {// BR ADDRESS
+        switch (opcode) {// BR ADDRESS
+            case BR: {
                 newPC = target_address;
                 break;
             }
@@ -662,55 +513,55 @@ public class Simulator {
                     newPC = target_address;
                 else
                     newPC = this.PC + 1;
-                ;
                 break;
             }
-            case LD: {// LD R1 MEM_ADDRESS
+// LD R1 MEM_ADDRESS
+            case LD: {
                 this.registers.set(resultRegister, this.registers.get(memory_address));
-                this.incrementPC();
+                newPC = this.PC + 1;
                 break;
             }
-            case MOVA: {// MOVA RESULTREG R1
+// MOVA RESULTREG R1
+            case MOVA: {
                 this.registers.set(resultRegister, this.registers.get(this.registers.get(r1)));
-                this.incrementPC();
+                newPC = this.PC + 1;
                 break;
             }
-            case MOVB: {// MOVB R1 R2
+// MOVB R1 R2
+            case MOVB: {
                 this.registers.set(resultRegister, r1);
-                this.incrementPC();
+                newPC = this.PC + 1;
                 break;
             }
-            case ST: {// ST R1 R2
+// ST R1 R2
+            case ST: {
                 int first = this.registers.get(r1);
                 int second = this.registers.get(r2);
                 this.memory.set(first, second);
                 newPC = this.PC + 1;
-                ;
                 break;
             }
-            case ADD: {// ADD R1 R2 REGRESULT
+// ADD R1 R2 REGRESULT
+            case ADD: {
                 int first = this.registers.get(r1);
                 int second = this.registers.get(r2);
                 this.registers.set(resultRegister, (first + second));
                 System.out.println("added registers :- " + r1 + " and " + r2 + " to get " + this.registers.get(resultRegister));
-
                 newPC = this.PC + 1;
-                ;
                 break;
             }
-            case SUB: {//SUB R1 R2 REGRESULT
+//SUB R1 R2 REGRESULT
+            case SUB: {
                 int first = this.registers.get(r1);
                 int second = this.registers.get(r2);
                 this.registers.set(resultRegister, first - second);
                 newPC = this.PC + 1;
-                ;
                 break;
             }
-
-            case CMP: {//CMP R1 R2 REGRESULT
+//CMP R1 R2 REGRESULT
+            case CMP: {
                 int first = this.registers.get(r1);
                 int second = this.registers.get(r2);
-
                 if (first > second) {
                     this.registers.set(resultRegister, 1);
                 } else if (first == second) {
@@ -719,72 +570,78 @@ public class Simulator {
                     this.registers.set(resultRegister, -1);
                 }
                 newPC = this.PC + 1;
-                ;
-
                 break;
             }
-            case AND: {//AND R1 R2 REGRESULT
+//AND R1 R2 REGRESULT
+            case AND: {
                 int first = this.registers.get(r1);
                 int second = this.registers.get(r2);
                 this.registers.set(resultRegister, first & second);
-
+                newPC = this.PC + 1;
                 break;
             }
-            case LDI: {//LDI REGRESULT CONST
+//LDI REGRESULT CONST
+            case LDI: {
                 this.registers.set(resultRegister, constant);
                 System.out.println("set register :- " + resultRegister + " to " + constant);
                 newPC = this.PC + 1;
-                ;
                 break;
             }
-            case MOV: {//MOV R1 REGRESULT
+//MOV R1 REGRESULT
+            case MOV: {
                 int first = this.registers.get(r1);
                 this.registers.set(resultRegister, first);
+                newPC = this.PC + 1;
                 break;
             }
-            case MUL: {//MUL R1 R2 REGRESULT
+//MUL R1 R2 REGRESULT
+            case MUL: {
                 int first = this.registers.get(r1);
                 int second = this.registers.get(r2);
                 this.registers.set(resultRegister, first * second);
+                newPC = this.PC + 1;
                 break;
             }
-            case NOT: {//NOT R1 REGRESULT
+//NOT R1 REGRESULT
+            case NOT: {
                 int first = this.registers.get(r1);
                 this.registers.set(resultRegister, ~first);
+                newPC = this.PC + 1;
                 break;
             }
-            case ADDI: {//ADD R1 CONST REGRESULT
+//ADD R1 CONST REGRESULT
+            case ADDI: {
                 int value = this.registers.get(r1);
                 this.registers.set(resultRegister, value + constant);
                 newPC = this.PC + 1;
-                ;
                 break;
             }
-            case BLEQ: {//BLEQ R1 R2 ADDRESS
+//BLEQ R1 R2 ADDRESS
+            case BLEQ: {
                 int first = this.registers.get(r1);
                 int second = this.registers.get(r2);
                 if (first <= second) {
                     newPC = target_address;
                 } else {
                     newPC = this.PC + 1;
-                    ;
                 }
                 break;
             }
-            case HALT: {// HALT
+// HALT
+            case HALT: {
                 this.finished = true;
                 System.out.println("set finished to true inside of execute");
                 System.out.println(executionObj.opcode);
+                break;
+            }
+            case DIV: {
                 break;
             }
             default:
                 System.out.println("Error, unknown OPCODE in execute");
                 break;
         }
-        //TODO update PC here.
-        pcLock.lock();
         this.PC = newPC;
-        pcLock.unlock();
     }
 
     public int alu(ExecutionObj executionObj) {
