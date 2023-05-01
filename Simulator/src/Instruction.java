@@ -70,7 +70,15 @@ public class Instruction {
                 break;
             }
             case "HALT": {// HALT
+                actualOpcode = Opcode.HALT;
                 break;
+            }
+            case "MOVA": {
+                actualOpcode = Opcode.MOVA;
+                break;
+            }
+            case "MOVB": {
+                actualOpcode = Opcode.MOVB;
             }
             default:
                 System.out.println("Error, unknown OPCODE when parsing input file");
@@ -78,4 +86,9 @@ public class Instruction {
         return actualOpcode;
     }
 
+    public boolean hasDependency(Instruction instruction) {
+
+        return linenumber < instruction.linenumber;
+    }
 }
+

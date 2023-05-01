@@ -1,3 +1,5 @@
+import java.util.ArrayList;
+
 public class ExecutionObj {
     public ExecutionObj(Opcode opcode, int constant, int resultRegister, int r1, int r2, int target_address,
                         int memory_address ) {
@@ -8,6 +10,7 @@ public class ExecutionObj {
         this.r2 = r2;
         this.target_address = target_address;
         this.memory_address = memory_address;
+        this.dependencies = new ArrayList<Integer>();
 
     }
     public Opcode opcode;
@@ -18,6 +21,7 @@ public class ExecutionObj {
     public int target_address;
     public int memory_address;
     public int instructionID;
+    public ArrayList<Integer> dependencies;
 
 
     @Override
@@ -50,6 +54,37 @@ public class ExecutionObj {
         {
             return false;
         }
+        else if (!(this.dependencies.equals(anotherObj.dependencies)))
+        {
+            return false;
+        }
         return true;
+    }
+    public boolean hasDependency(ExecutionObj obj)
+    {
+        //RAW
+        if(r1 == obj.resultRegister || r2 == obj.resultRegister)
+        {
+            return true;
+        }
+        //WAR
+        else if (resultRegister == obj.r1 || resultRegister == obj.r2)
+        {
+            return true;
+        }
+        //WAW
+        else if ( resultRegister == obj.resultRegister)
+        {
+         return true;
+        }
+        //branch dependency
+        else if (obj.target_address != -1)
+        {
+            return true;
+        }
+        else {
+            return false;
+        }
+
     }
 }
