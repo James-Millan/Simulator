@@ -1,8 +1,5 @@
 import java.io.File;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Objects;
-import java.util.Scanner;
+import java.util.*;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.zip.CheckedOutputStream;
@@ -40,7 +37,7 @@ public class Simulator {
             registers.add(0);
         }
         for (int i = 0; i < 64; i++) {
-            registerFile.add(0);
+            scoreboard.put(i, true);
         }
         for (int i = 0; i < 512; i++) {
             memory.add(0);
@@ -54,12 +51,11 @@ public class Simulator {
     public int PC = 0;
     public boolean isStalled = false;
     public int cycles = 0;
-    public ArrayList<ExecutionObj> aluInstructions = new ArrayList<>();
-    public ArrayList<ExecutionObj> memAccessInstructions = new ArrayList<>();
-
+    public ArrayList<ExecutionObj> aluResStat = new ArrayList<>();
+    public ArrayList<ExecutionObj> memAccessResStat = new ArrayList<>();
     public ArrayList<ExecutionObj> readyInstructions = new ArrayList<>();
     public ArrayList<Integer> registers = new ArrayList<>();
-    public ArrayList<Integer> registerFile = new ArrayList<>();
+    public HashMap<Integer, Boolean> scoreboard = new HashMap<>();
     public ArrayList<Integer> memory = new ArrayList<>();
     public ArrayList<Instruction> instructions = new ArrayList<>();
 
@@ -88,6 +84,7 @@ public class Simulator {
         } catch (Exception e) {
             System.out.println("please name the input file:- \"input.txt\"");
         }
+
         clock();
     }
 
@@ -202,12 +199,11 @@ public class Simulator {
     public void issue(ExecutionObj executionObj) {
 
         System.out.println("issue");
-
         boolean isAluInstruction = isAluInstruction(executionObj.opcode);
         if (isAluInstruction) {
-            this.aluInstructions.add(executionObj);
+            this.aluResStat.add(executionObj);
         } else {
-            this.memAccessInstructions.add(executionObj);
+            this.memAccessResStat.add(executionObj);
         }
     }
 
@@ -383,13 +379,25 @@ public class Simulator {
 
     public void alu() {
         if (this.aluState == null) {
-            if (this.aluInstructions.size() > 0) {
-                this.aluState = new ExecutionState(this.aluInstructions.get(0));
-                this.aluInstructions.remove(0);
+            if (this.aluResStat.size() > 0) {
+                for(int i = 0; i < this.aluResStat.size(); i++)
+                {
+                    if(isAvailable(aluResStat.get(i)))
+                    {
+                        this.aluState = new ExecutionState(this.aluResStat.get(i));
+                        this.aluResStat.remove(i);
+                        break;
+                    }
+                }
+
             } else {
                 System.out.println("alu queue empty");
                 return;
             }
+        }
+        if(this.aluState == null)
+        {
+            return;
         }
 
         aluState.currentCycleNumber++;
@@ -404,15 +412,26 @@ public class Simulator {
 
     public void memoryAccess() {
         if (this.memAccessState == null) {
-            if (memAccessInstructions.size() > 0) {
-                this.memAccessState = new ExecutionState(this.memAccessInstructions.get(0));
-                this.memAccessInstructions.remove(0);
+            if (memAccessResStat.size() > 0) {
+                for(int i = 0; i < this.memAccessResStat.size(); i++)
+                {
+                    if(isAvailable(memAccessResStat.get(i)))
+                    {
+                        this.memAccessState = new ExecutionState(this.memAccessResStat.get(i));
+                        this.memAccessResStat.remove(i);
+                        break;
+                    }
+                }
             } else {
                 System.out.println("memory access queue is empty");
                 return;
             }
         }
 
+        if(this.memAccessState == null)
+        {
+            return;
+        }
 
         memAccessState.currentCycleNumber++;
         if (memAccessState.isComplete()) {
@@ -453,6 +472,24 @@ public class Simulator {
 
     }
 
+    public boolean isAvailable(ExecutionObj obj)
+    {
+        int r1 = obj.r1;
+        int r2 = obj.r2;
+        int resultReg = obj.resultRegister;
+        boolean isAvailable = true;
+        if(r1 != -1 && !scoreboard.get(r1))
+        {
+            isAvailable = false;
+        } else if (r2 != -1 && !scoreboard.get(r2)) {
+            isAvailable = false;
+        }
+        else if (resultReg != -1 && !scoreboard.get(resultReg))
+        {
+            isAvailable = false;
+        }
+        return isAvailable;
+    }
 
     private boolean isAluInstruction(Opcode opcode) {
         System.out.println("entered into alu function");
