@@ -14,38 +14,37 @@ public class ExecutionState {
 
     public int getNumCycles(ExecutionObj executionObj) {
         Opcode opcode = executionObj.opcode;
-        return 1;
-//        switch(opcode){
-//            case BR:
-//            case ADD:
-//            case SUB:
-//            case AND:
-//            case NOT:
-//            case ADDI:
-//            case MOV:
-//            case LDI:
-//            case HALT:
-//            case MOVB:
-//            case MOVA:{
-//                return 1;
-//            }
-//            case BZ:
-//            case BLEQ: {
-//                return 2;
-//            }
-//            case LD:
-//            case ST: {
-//                return 4;
-//            }
-//            case CMP:
-//            case MUL: {
-//                return 3;
-//            }
-//            case DIV:
-//                return 10;
-//            default:
-//                System.out.println("Error, unknown OPCODE");
-//                return 1;
-//        }
+        switch(opcode){
+            case BR:
+            case ADD:
+            case SUB:
+            case AND:
+            case NOT:
+            case ADDI:
+            case MOV:
+            case LDI:
+            case HALT:
+            case MOVB:
+            case MOVA:{
+                return 1;
+            }
+            case BZ:
+            case BLEQ: {
+                return 2;
+            }
+            case LD:
+            case ST: {
+                return 4;
+            }
+            case CMP:
+            case MUL: {
+                return 3;
+            }
+            case DIV:
+                return 10;
+            default:
+                System.out.println("Error, unknown OPCODE");
+                return 1;
+        }
     }
 }

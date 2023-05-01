@@ -340,9 +340,12 @@ public class Simulator {
                 this.decodedInstruction = decode(this.fetchedInstruction);
                 this.readyInstructions.add(issue(this.decodedInstruction));
             }
-            execute(this.readyInstructions.get(0));
-            this.readyInstructions.remove(0);
+            executionUnit();
             this.cycles++;
+            if(this.cycles > 100000)
+            {
+                this.finished = true;
+            }
         }
     }
 
@@ -454,41 +457,25 @@ public class Simulator {
         return executionObj;
     }
 
-    public void executionUnit(ExecutionState executionState)
+    public void executionUnit()
     {
-        if(executionState == null)
+        if(this.executionState == null)
         {
-            executionState = new ExecutionState(this.readyInstructions.get(0));
-            this.readyInstructions.remove(0);
-        }
-        else {
-            executionState = this.executionState;
-        }
-        ExecutionObj executionObj = executionState.executionObj;
-        if (executionState.isComplete()) {
-            //take a new object from the queue. (reservation station)
             this.executionState = new ExecutionState(this.readyInstructions.get(0));
             this.readyInstructions.remove(0);
-            executionState = this.executionState;
-            executionState.currentCycleNumber++;
-            if (executionState.isComplete()) {
-                execute(executionObj);
-                this.isStalled = false;
-
-            }
-        } else {
+        }
+        executionState.currentCycleNumber++;
+        if(executionState.isComplete())
+        {
+            execute(executionState.executionObj);
+            this.executionState = null;
+            this.isStalled = false;
+        }
+        else {
             this.isStalled = true;
-            this.executionState = executionState;
-            executionState.currentCycleNumber++;
-            if (executionState.isComplete()) {
-                execute(executionObj);
-                this.isStalled = false;
-            }
         }
-        if (executionObj.opcode == Opcode.HALT) {
-            this.finished = true;
-            System.out.println("set finished to true in execution unit");
-        }
+
+
     }
 
     public void execute(ExecutionObj executionObj) {
