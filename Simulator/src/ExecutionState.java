@@ -43,7 +43,8 @@ public class ExecutionState {
             case DIV:
                 return 10;
             default:
-                System.out.println("Error, unknown OPCODE");
+                System.out.println("Error, unknown OPCODE in execution state");
+                System.out.println(opcode);
                 return 1;
         }
     }

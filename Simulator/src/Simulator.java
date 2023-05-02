@@ -1,3 +1,5 @@
+import com.sun.management.OperatingSystemMXBean;
+
 import java.io.File;
 import java.util.*;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -65,7 +67,8 @@ public class Simulator {
     public ExecutionState executionState = null;
     public ExecutionState aluState = null;
     public ExecutionState memAccessState = null;
-    public Checkpoint lastCheckpoint;
+    public Checkpoint lastCheckpoint = new Checkpoint(0, this.registers, this.memory,
+            new ExecutionObj(Opcode.HALT,0,0,0,0,0,0),false);
 
     public void initialise() {
         //preprocess inputs
@@ -109,6 +112,11 @@ public class Simulator {
 
         Instruction instruction = this.instructions.get(this.PC);
         System.out.println(instruction.opcode);
+        if(isBranch(instruction.opcode))
+        {
+            //TODO send to branch predictor.
+            branchPredictor(decode(instruction));
+        }
         return instruction;
     }
 
@@ -234,18 +242,49 @@ public class Simulator {
         int r2 = executionObj.r2;
         int target_address = executionObj.target_address;
         int memory_address = executionObj.memory_address;
-        //TODO this should send a pair to set in memory to writeback
         this.instructionsCount++;
+        boolean sameAsLastCheckpoint = false;
+        if(this.lastCheckpoint.executionObj.equals(executionObj))
+        {
+            sameAsLastCheckpoint = true;
+        }
+
         switch (opcode) {// BR ADDRESS
             case BR: {
                 newPC = target_address;
                 break;
             }
             case BZ: {// BZ R1 ADDRESS
-                if (this.registers.get(r1) == 0)
+                if (this.registers.get(r1) == 0) {
+
+                    if(sameAsLastCheckpoint && !this.lastCheckpoint.branchTaken)
+                    {
+                        //TODO restore from checkpoint and flush pipeline.
+                        this.registers = this.lastCheckpoint.registers;
+                        this.memory = this.lastCheckpoint.memory;
+                        this.fetchedInstruction = null;
+                        this.decodedInstruction = null;
+                        this.aluState = null;
+                        this.memAccessState = null;
+                        this.aluResStat.clear();
+                        this.memAccessResStat.clear();
+                    }
                     newPC = target_address;
-                else
-                    newPC = this.PC + 1;
+                }
+                else {
+                    if (sameAsLastCheckpoint && this.lastCheckpoint.branchTaken) {
+                        //TODO restore from checkpoint and flush pipeline.
+                        this.registers = this.lastCheckpoint.registers;
+                        this.memory = this.lastCheckpoint.memory;
+                        this.fetchedInstruction = null;
+                        this.decodedInstruction = null;
+                        this.aluState = null;
+                        this.memAccessState = null;
+                        this.aluResStat.clear();
+                        this.memAccessResStat.clear();
+                    }
+                    newPC = this.lastCheckpoint.PC + 1;
+                }
                 break;
             }
 // LD R1 MEM_ADDRESS
@@ -354,9 +393,32 @@ public class Simulator {
                 int first = this.registers.get(r1);
                 int second = this.registers.get(r2);
                 if (first <= second) {
+                    if(sameAsLastCheckpoint && !this.lastCheckpoint.branchTaken)
+                    {
+                        //TODO restore from checkpoint and flush pipeline.
+                        this.registers = this.lastCheckpoint.registers;
+                        this.memory = this.lastCheckpoint.memory;
+                        this.fetchedInstruction = null;
+                        this.decodedInstruction = null;
+                        this.aluState = null;
+                        this.memAccessState = null;
+                        this.aluResStat.clear();
+                        this.memAccessResStat.clear();
+                    }
                     newPC = target_address;
                 } else {
-                    newPC = this.PC + 1;
+                    if (sameAsLastCheckpoint && this.lastCheckpoint.branchTaken) {
+                        //TODO restore from checkpoint and flush pipeline.
+                        this.registers = this.lastCheckpoint.registers;
+                        this.memory = this.lastCheckpoint.memory;
+                        this.fetchedInstruction = null;
+                        this.decodedInstruction = null;
+                        this.aluState = null;
+                        this.memAccessState = null;
+                        this.aluResStat.clear();
+                        this.memAccessResStat.clear();
+                    }
+                    newPC = this.lastCheckpoint.PC + 1;
                 }
                 break;
             }
@@ -447,13 +509,7 @@ public class Simulator {
         //takes in a branch instruction as an input. needs to set a checkpoint that it can revert to if incorrect
         // if (target_address > this.PC) don't take branch else take branch for a static implementation. Can create
         // a cache of known branches to implement dynamic branch prediction at a later date.
-        Opcode opcode = executionObj.opcode;
-        int constant = executionObj.constant;
-        int resultRegister = executionObj.resultRegister;
-        int r1 = executionObj.r1;
-        int r2 = executionObj.r2;
         int target_address = executionObj.target_address;
-        int memory_address = executionObj.memory_address;
 
         int checkpointPC = this.PC;
         ArrayList<Integer> checkPointRegisters = this.registers;
@@ -522,6 +578,19 @@ public class Simulator {
         }
     }
 
+    private boolean isBranch(Opcode opcode)
+    {
+        switch (opcode) {
+            case BZ:
+            case BLEQ:
+            case BR:
+            {
+                return true;
+            }
+            default:
+                return false;
+        }
+    }
     private void incrementPC() {
         this.PC = this.PC + 1;
     }
