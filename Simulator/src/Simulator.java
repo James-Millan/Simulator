@@ -37,8 +37,7 @@ public class Simulator {
     public Simulator() {
         for (int i = 0; i < 64; i++) {
             registers.add(0);
-        }
-        for (int i = 0; i < 64; i++) {
+            arf.add(0);
             scoreboard.put(i, true);
         }
         for (int i = 0; i < 512; i++) {
@@ -53,6 +52,7 @@ public class Simulator {
     public int PC = 0;
     public boolean isStalled = false;
     public int cycles = 0;
+    public ArrayList<Integer> arf = new ArrayList<>();
     public ArrayList<ExecutionObj> aluResStat = new ArrayList<>();
     public ArrayList<ExecutionObj> memAccessResStat = new ArrayList<>();
     public ArrayList<ExecutionObj> readyInstructions = new ArrayList<>();
@@ -60,6 +60,7 @@ public class Simulator {
     public HashMap<Integer, Boolean> scoreboard = new HashMap<>();
     public ArrayList<Integer> memory = new ArrayList<>();
     public ArrayList<Instruction> instructions = new ArrayList<>();
+    public ArrayList<ExecutionObj> reorderBuffer = new ArrayList<>();
 
     public Instruction fetchedInstruction = null;
     public ExecutionObj decodedInstruction = null;
@@ -95,7 +96,10 @@ public class Simulator {
         while (!this.finished) {
             if (!this.isStalled) {
                 this.fetchedInstruction = fetch();
-                this.decodedInstruction = decode(this.fetchedInstruction);
+                ExecutionObj decodedObj = decode(this.fetchedInstruction);
+                this.decodedInstruction = decodedObj;
+                reorderBuffer.add(decodedObj);
+
                 issue(this.decodedInstruction);
             }
             alu();
@@ -105,6 +109,7 @@ public class Simulator {
                 this.finished = true;
             }
         }
+        this.arf = this.registers;
     }
 
     public Instruction fetch() {
@@ -114,7 +119,7 @@ public class Simulator {
         System.out.println(instruction.opcode);
         if(isBranch(instruction.opcode))
         {
-            //TODO send to branch predictor.
+            //send to branch predictor.
             branchPredictor(decode(instruction));
         }
         return instruction;
@@ -259,29 +264,23 @@ public class Simulator {
 
                     if(sameAsLastCheckpoint && !this.lastCheckpoint.branchTaken)
                     {
-                        //TODO restore from checkpoint and flush pipeline.
-                        this.registers = this.lastCheckpoint.registers;
-                        this.memory = this.lastCheckpoint.memory;
-                        this.fetchedInstruction = null;
-                        this.decodedInstruction = null;
-                        this.aluState = null;
-                        this.memAccessState = null;
-                        this.aluResStat.clear();
-                        this.memAccessResStat.clear();
+                        //made incorrect choice so flush the pipeline
+                       flush();
+                    }
+                    else {
+                        //we are certain this is correct so commit it to the arf :)
+                        commit();
                     }
                     newPC = target_address;
                 }
                 else {
                     if (sameAsLastCheckpoint && this.lastCheckpoint.branchTaken) {
-                        //TODO restore from checkpoint and flush pipeline.
-                        this.registers = this.lastCheckpoint.registers;
-                        this.memory = this.lastCheckpoint.memory;
-                        this.fetchedInstruction = null;
-                        this.decodedInstruction = null;
-                        this.aluState = null;
-                        this.memAccessState = null;
-                        this.aluResStat.clear();
-                        this.memAccessResStat.clear();
+                        //made incorrect choice so flush the pipeline
+                        flush();
+                    }
+                    else {
+                        //we are certain this is correct so commit it to the arf :)
+                        commit();
                     }
                     newPC = this.lastCheckpoint.PC + 1;
                 }
@@ -409,16 +408,10 @@ public class Simulator {
                 } else {
                     if (sameAsLastCheckpoint && this.lastCheckpoint.branchTaken) {
                         //TODO restore from checkpoint and flush pipeline.
-                        this.registers = this.lastCheckpoint.registers;
-                        this.memory = this.lastCheckpoint.memory;
-                        this.fetchedInstruction = null;
-                        this.decodedInstruction = null;
-                        this.aluState = null;
-                        this.memAccessState = null;
-                        this.aluResStat.clear();
-                        this.memAccessResStat.clear();
+                        flush();
                     }
                     newPC = this.lastCheckpoint.PC + 1;
+
                 }
                 break;
             }
@@ -522,12 +515,24 @@ public class Simulator {
             this.lastCheckpoint = new Checkpoint(checkpointPC, checkPointRegisters, checkPointMem, executionObj, true);
             this.PC = target_address;
         }
-        //TODO actually calculate the value of the branch. I think that we can check every branch instruction against executionObj
-        //and it's actual value. If this is different. reload the last checkpoint.
-
-
     }
 
+    private void flush()
+    {
+        this.registers = this.lastCheckpoint.registers;
+        this.memory = this.lastCheckpoint.memory;
+        this.fetchedInstruction = null;
+        this.decodedInstruction = null;
+        this.aluState = null;
+        this.memAccessState = null;
+        this.aluResStat.clear();
+        this.memAccessResStat.clear();
+    }
+
+    private void commit()
+    {
+        this.arf = this.registers;
+    }
     public boolean isAvailable(ExecutionObj obj)
     {
         int r1 = obj.r1;
