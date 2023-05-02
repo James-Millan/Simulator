@@ -67,6 +67,7 @@ public class Simulator {
 
     public ExecutionState executionState = null;
     public ExecutionState aluState = null;
+    public ExecutionState alu2State = null;
     public ExecutionState memAccessState = null;
     public Checkpoint lastCheckpoint = new Checkpoint(0, this.registers, this.memory,
             new ExecutionObj(Opcode.HALT,0,0,0,0,0,0),false);
@@ -103,6 +104,7 @@ public class Simulator {
                 issue(this.decodedInstruction);
             }
             alu();
+            alu2();
             memoryAccess();
             this.cycles++;
             if (this.cycles > 100000) {
@@ -459,6 +461,39 @@ public class Simulator {
         if (aluState.isComplete()) {
             execute(aluState.executionObj);
             this.aluState = null;
+            this.isStalled = false;
+        } else {
+            this.isStalled = true;
+        }
+    }
+
+    public void alu2() {
+        if (this.alu2State == null) {
+            if (this.aluResStat.size() > 0) {
+                for(int i = 0; i < this.aluResStat.size(); i++)
+                {
+                    if(isAvailable(aluResStat.get(i)))
+                    {
+                        this.alu2State = new ExecutionState(this.aluResStat.get(i));
+                        this.aluResStat.remove(i);
+                        break;
+                    }
+                }
+
+            } else {
+                System.out.println("alu queue empty");
+                return;
+            }
+        }
+        if(this.alu2State == null)
+        {
+            return;
+        }
+
+        alu2State.currentCycleNumber++;
+        if (alu2State.isComplete()) {
+            execute(alu2State.executionObj);
+            this.alu2State = null;
             this.isStalled = false;
         } else {
             this.isStalled = true;
