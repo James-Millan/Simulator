@@ -2,18 +2,31 @@ public class ExecutionState {
     public ExecutionObj executionObj;
     public int cyclesForInstruction;
     public int currentCycleNumber;
+    public int operand1;
+    public int operand2;
+    public int result;
+    public Opcode opcode;
     public ExecutionState(ExecutionObj executionObj)
     {
         this.executionObj = executionObj;
-        this.cyclesForInstruction = getNumCycles(executionObj);
+        this.cyclesForInstruction = getNumCycles(executionObj.opcode);
+        this.currentCycleNumber = 0;
+    }
+
+    public ExecutionState(ReservationStationObject obj)
+    {
+        this.opcode = obj.opcode;
+        this.operand1 = obj.operand1;
+        this.operand2 = obj.operand2;
+        this.result = 0;
+        this.cyclesForInstruction = getNumCycles(opcode);
         this.currentCycleNumber = 0;
     }
     public boolean isComplete(){
         return currentCycleNumber == cyclesForInstruction;
     }
 
-    public int getNumCycles(ExecutionObj executionObj) {
-        Opcode opcode = executionObj.opcode;
+    public int getNumCycles(Opcode opcode) {
         switch(opcode){
             case BR:
             case ADD:

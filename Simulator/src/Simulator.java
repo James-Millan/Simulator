@@ -1,10 +1,5 @@
-import com.sun.management.OperatingSystemMXBean;
-
 import java.io.File;
 import java.util.*;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.BlockingQueue;
-import java.util.zip.CheckedOutputStream;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -38,7 +33,7 @@ public class Simulator {
         for (int i = 0; i < 64; i++) {
             registers.add(0);
             arf.add(0);
-            scoreboard.put(i, true);
+            rat.add(new RATEntry(i,true,-1));
         }
         for (int i = 0; i < 512; i++) {
             memory.add(0);
@@ -53,11 +48,13 @@ public class Simulator {
     public boolean isStalled = false;
     public int cycles = 0;
     public ArrayList<Integer> arf = new ArrayList<>();
+    public ReservationStationObject[] reservationStation = new ReservationStationObject[16] ;
     public ArrayList<ExecutionObj> aluResStat = new ArrayList<>();
     public ArrayList<ExecutionObj> memAccessResStat = new ArrayList<>();
     public ArrayList<ExecutionObj> readyInstructions = new ArrayList<>();
     public ArrayList<Integer> registers = new ArrayList<>();
-    public HashMap<Integer, Boolean> scoreboard = new HashMap<>();
+    public ArrayList<RATEntry> rat = new ArrayList<>();
+    //public HashMap<Integer, Integer> rat = new HashMap<>();
     public ArrayList<Integer> memory = new ArrayList<>();
     public ArrayList<Instruction> instructions = new ArrayList<>();
     public ArrayList<ExecutionObj> reorderBuffer = new ArrayList<>();
@@ -103,9 +100,9 @@ public class Simulator {
 
                 issue(this.decodedInstruction);
             }
-            alu();
-            alu2();
-            memoryAccess();
+            executionUnit();
+            //alu2();
+            //memoryAccess();
             this.cycles++;
             if (this.cycles > 100000) {
                 this.finished = true;
@@ -213,23 +210,103 @@ public class Simulator {
 
     public void issue(ExecutionObj executionObj) {
 
+        ReservationStationObject reservationStationObject = new ReservationStationObject(0,0,executionObj.opcode, true);
         System.out.println("issue");
-        boolean isAluInstruction = isAluInstruction(executionObj.opcode);
-        if (isAluInstruction) {
-            this.aluResStat.add(executionObj);
-        } else {
-            this.memAccessResStat.add(executionObj);
+        //TODO register renaming in RAT.
+        if(!(executionObj.r1 == -1)) {
+            if (!rat.get(executionObj.r1).done) {
+                int provider = rat.get(executionObj.r1).provider;
+                if (provider != -1) {
+                    reservationStationObject.operand1Provider = provider;
+                } else {
+                    reservationStationObject.operand1 = this.registers.get(executionObj.r1);
+                }
+                reservationStationObject.ready = false;
+            }
+            else {
+                reservationStationObject.operand1 = registers.get(executionObj.r1);
+            }
         }
+        if(!(executionObj.r2 == -1)) {
+            if (!rat.get(executionObj.r2).done) {
+                int provider = rat.get(executionObj.r2).provider;
+                if (provider != -1) {
+                    reservationStationObject.operand2Provider = provider;
+                } else {
+                    reservationStationObject.operand2 = this.registers.get(executionObj.r2);
+                }
+
+                reservationStationObject.ready = false;
+            } else {
+                reservationStationObject.operand2 = registers.get(executionObj.r2);
+            }
+        }
+        for(int i = 0; i < reservationStation.length; i++)
+        {
+            if(reservationStation[i] == null)
+            {
+                reservationStation[i] = reservationStationObject;
+                rat.get(executionObj.resultRegister).provider = i;
+            }
+        }
+//        boolean isAluInstruction = isAluInstruction(executionObj.opcode);
+//        if (isAluInstruction) {
+//            this.aluResStat.add(executionObj);
+//        } else {
+//            this.memAccessResStat.add(executionObj);
+//        }
     }
 
     public void executionUnit() {
+        int id = -1;
         if (this.executionState == null) {
-            this.executionState = new ExecutionState(this.readyInstructions.get(0));
-            this.readyInstructions.remove(0);
+            ReservationStationObject reservationStationObject = null;
+
+            for(int j = 0; j < reservationStation.length; j++)
+            {
+                if(reservationStation[j].ready)
+                {
+                    reservationStationObject = reservationStation[j];
+                    id = j;
+                }
+            }
+            if(reservationStationObject == null)
+            {
+                return;
+            }
+            this.executionState = new ExecutionState(reservationStationObject);
         }
         executionState.currentCycleNumber++;
         if (executionState.isComplete()) {
-            execute(executionState.executionObj);
+            int result = executeALU(executionState);
+            //TODO broadcast result
+            for(int i = 0; i < reservationStation.length; i++)
+            {
+                if(reservationStation[i].operand1Provider == id )
+                {
+                    reservationStation[i].operand1 = result;
+                    reservationStation[i].operand1Provider = -1;
+                }
+                else if(reservationStation[i].operand2Provider == id )
+                {
+                    reservationStation[i].operand2 = result;
+                    reservationStation[i].operand2Provider = -1;
+                }
+                if(reservationStation[i].operand2Provider == -1 && reservationStation[i].operand1Provider == -1)
+                {
+                    reservationStation[i].ready = true;
+                }
+            }
+            //TODO writeback result.
+            for(int j = 0; j < rat.size(); j++)
+            {
+                if(rat.get(j).provider == id)
+                {
+                    this.registers.set(j, result);
+                    this.rat.get(j).provider = -1;
+                }
+            }
+            reservationStation[id] = null;
             this.executionState = null;
             this.isStalled = false;
         } else {
@@ -238,6 +315,28 @@ public class Simulator {
 
 
     }
+
+
+    public int executeALU(ExecutionState executionState)
+    {
+        System.out.println("entered new execute function");
+        int op1 = executionState.operand1;
+        int op2 = executionState.operand2;
+        switch (executionState.opcode)
+        {
+            case DIV:
+                return (int)Math.floor(op1 / op2);
+            case MUL:
+                return op1 * op2;
+            case ADD: return op1 + op2;
+            case ADDI: return op1 + op2;
+            case SUB: return op1 - op2;
+            case HALT: this.finished = true;
+                return 0;
+        }
+        return 0;
+    }
+
 
     public void execute(ExecutionObj executionObj) {
         System.out.println("executing");
@@ -425,6 +524,10 @@ public class Simulator {
                 break;
             }
             case DIV: {
+                int first = this.registers.get(r1);
+                int second = this.registers.get(r2);
+                int result = first / second;
+                this.registers.set(resultRegister, result);
                 break;
             }
             default:
@@ -574,13 +677,13 @@ public class Simulator {
         int r2 = obj.r2;
         int resultReg = obj.resultRegister;
         boolean isAvailable = true;
-        if(r1 != -1 && !scoreboard.get(r1))
+        if(r1 != -1 && !rat.get(r1).done)
         {
             isAvailable = false;
-        } else if (r2 != -1 && !scoreboard.get(r2)) {
+        } else if (r2 != -1 && !rat.get(r2).done) {
             isAvailable = false;
         }
-        else if (resultReg != -1 && !scoreboard.get(resultReg))
+        else if (resultReg != -1 && !rat.get(resultReg).done)
         {
             isAvailable = false;
         }

@@ -26,7 +26,7 @@ public class ExecutionObj {
 
     @Override
     public boolean equals(Object object) {
-        ExecutionObj anotherObj= (ExecutionObj) object; //downcasting from object to Person
+        ExecutionObj anotherObj= (ExecutionObj) object; //downcasting from object
         if (!this.opcode.equals(anotherObj.opcode)) {
             return false;
         }

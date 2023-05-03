@@ -79,6 +79,11 @@ public class Instruction {
             }
             case "MOVB": {
                 actualOpcode = Opcode.MOVB;
+                break;
+            }
+            case "DIV": {
+                actualOpcode = Opcode.DIV;
+                break;
             }
             default:
                 System.out.println("Error, unknown OPCODE when parsing input file");
