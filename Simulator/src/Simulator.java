@@ -56,16 +56,20 @@ public class Simulator {
     public ArrayList<ExecutionObj> aluResStat = new ArrayList<>();
     public ArrayList<ExecutionObj> memAccessResStat = new ArrayList<>();
     public ArrayList<ExecutionObj> readyInstructions = new ArrayList<>();
+    public ArrayList<ExecutionObj> branchUnitResStat = new ArrayList<>();
+
     public ArrayList<Integer> registers = new ArrayList<>();
     public HashMap<Integer, Boolean> scoreboard = new HashMap<>();
     public ArrayList<Integer> memory = new ArrayList<>();
     public ArrayList<Instruction> instructions = new ArrayList<>();
     public ArrayList<ExecutionObj> reorderBuffer = new ArrayList<>();
+    public ArrayList<WriteBackObj> writeBackObjs = new ArrayList<>();
 
     public Instruction fetchedInstruction = null;
     public ExecutionObj decodedInstruction = null;
 
     public ExecutionState executionState = null;
+    public ExecutionState branchUnitState = null;
     public ExecutionState aluState = null;
     public ExecutionState alu2State = null;
     public ExecutionState memAccessState = null;
@@ -95,7 +99,7 @@ public class Simulator {
 
     public void clock() {
         while (!this.finished) {
-            for (int i = 0; i < 4; i++) {
+            for (int i = 0; i < 1; i++) {
                 if (!this.isStalled) {
                     this.fetchedInstruction = fetch();
                     ExecutionObj decodedObj = decode(this.fetchedInstruction);
@@ -105,6 +109,7 @@ public class Simulator {
                     issue(this.decodedInstruction);
                 }
                 runExecutionUnits();
+                writeback();
             }
             this.cycles++;
             if (this.cycles > 100000) {
@@ -114,11 +119,20 @@ public class Simulator {
         this.arf = this.registers;
     }
 
+    public void writeback()
+    {
+        for (WriteBackObj obj :this.writeBackObjs) {
+            this.registers.set(obj.register, obj.value);
+        }
+        this.writeBackObjs = new ArrayList<>();
+    }
+
     public void runExecutionUnits()
     {
         alu();
         alu2();
         memoryAccess();
+        branchUnit();
     }
 
     public Instruction fetch() {
@@ -325,7 +339,8 @@ public class Simulator {
             case ADD: {
                 int first = this.registers.get(r1);
                 int second = this.registers.get(r2);
-                this.registers.set(resultRegister, (first + second));
+                this.writeBackObjs.add((new WriteBackObj(resultRegister, first + second)));
+                //this.registers.set(resultRegister, (first + second));
                 System.out.println("added registers :- " + r1 + " and " + r2 + " to get " + this.registers.get(resultRegister));
                 newPC = this.PC + 1;
                 break;
@@ -334,21 +349,27 @@ public class Simulator {
             case SUB: {
                 int first = this.registers.get(r1);
                 int second = this.registers.get(r2);
-                this.registers.set(resultRegister, first - second);
+                this.writeBackObjs.add((new WriteBackObj(resultRegister, first - second)));
+                //this.registers.set(resultRegister, first - second);
                 newPC = this.PC + 1;
                 break;
             }
 //CMP R1 R2 REGRESULT
             case CMP: {
+                int value;
                 int first = this.registers.get(r1);
                 int second = this.registers.get(r2);
                 if (first > second) {
-                    this.registers.set(resultRegister, 1);
+                    value = 1;
+                    //this.registers.set(resultRegister, 1);
                 } else if (first == second) {
-                    this.registers.set(resultRegister, 0);
+                    value = 0;
+                    //this.registers.set(resultRegister, 0);
                 } else {
-                    this.registers.set(resultRegister, -1);
+                    value = -1;
+                    //this.registers.set(resultRegister, -1);
                 }
+                this.writeBackObjs.add((new WriteBackObj(resultRegister, value)));
                 newPC = this.PC + 1;
                 break;
             }
@@ -356,7 +377,8 @@ public class Simulator {
             case AND: {
                 int first = this.registers.get(r1);
                 int second = this.registers.get(r2);
-                this.registers.set(resultRegister, first & second);
+                this.writeBackObjs.add((new WriteBackObj(resultRegister, first & second)));
+                //this.registers.set(resultRegister, first & second);
                 newPC = this.PC + 1;
                 break;
             }
@@ -378,21 +400,24 @@ public class Simulator {
             case MUL: {
                 int first = this.registers.get(r1);
                 int second = this.registers.get(r2);
-                this.registers.set(resultRegister, first * second);
+                this.writeBackObjs.add((new WriteBackObj(resultRegister, first * second)));
+                //this.registers.set(resultRegister, first * second);
                 newPC = this.PC + 1;
                 break;
             }
 //NOT R1 REGRESULT
             case NOT: {
                 int first = this.registers.get(r1);
-                this.registers.set(resultRegister, ~first);
+                this.writeBackObjs.add((new WriteBackObj(resultRegister, ~first)));
+                //this.registers.set(resultRegister, ~first);
                 newPC = this.PC + 1;
                 break;
             }
 //ADD R1 CONST REGRESULT
             case ADDI: {
                 int value = this.registers.get(r1);
-                this.registers.set(resultRegister, value + constant);
+                this.writeBackObjs.add((new WriteBackObj(resultRegister, value + constant)));
+                //this.registers.set(resultRegister, value + constant);
                 newPC = this.PC + 1;
                 break;
             }
@@ -432,6 +457,10 @@ public class Simulator {
                 break;
             }
             case DIV: {
+                int first = this.registers.get(r1);
+                int second = this.registers.get(r2);
+                this.writeBackObjs.add((new WriteBackObj(resultRegister, first / second)));
+                newPC = this.PC + 1;
                 break;
             }
             default:
@@ -468,6 +497,39 @@ public class Simulator {
         if (aluState.isComplete()) {
             execute(aluState.executionObj);
             this.aluState = null;
+            this.isStalled = false;
+        } else {
+            this.isStalled = true;
+        }
+    }
+
+    public void branchUnit() {
+        if (this.branchUnitState == null) {
+            if (this.branchUnitResStat.size() > 0) {
+                for(int i = 0; i < this.branchUnitResStat.size(); i++)
+                {
+                    if(isAvailable(branchUnitResStat.get(i)))
+                    {
+                        this.branchUnitState = new ExecutionState(this.branchUnitResStat.get(i));
+                        this.branchUnitResStat.remove(i);
+                        break;
+                    }
+                }
+
+            } else {
+                System.out.println("alu queue empty");
+                return;
+            }
+        }
+        if(this.branchUnitState == null)
+        {
+            return;
+        }
+
+        branchUnitState.currentCycleNumber++;
+        if (branchUnitState.isComplete()) {
+            execute(branchUnitState.executionObj);
+            this.branchUnitState = null;
             this.isStalled = false;
         } else {
             this.isStalled = true;
