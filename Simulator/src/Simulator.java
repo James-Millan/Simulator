@@ -95,23 +95,30 @@ public class Simulator {
 
     public void clock() {
         while (!this.finished) {
-            if (!this.isStalled) {
-                this.fetchedInstruction = fetch();
-                ExecutionObj decodedObj = decode(this.fetchedInstruction);
-                this.decodedInstruction = decodedObj;
-                reorderBuffer.add(decodedObj);
+            for (int i = 0; i < 4; i++) {
+                if (!this.isStalled) {
+                    this.fetchedInstruction = fetch();
+                    ExecutionObj decodedObj = decode(this.fetchedInstruction);
+                    this.decodedInstruction = decodedObj;
+                    //reorderBuffer.add(decodedObj);
 
-                issue(this.decodedInstruction);
+                    issue(this.decodedInstruction);
+                }
+                runExecutionUnits();
             }
-            alu();
-            alu2();
-            memoryAccess();
             this.cycles++;
             if (this.cycles > 100000) {
                 this.finished = true;
             }
         }
         this.arf = this.registers;
+    }
+
+    public void runExecutionUnits()
+    {
+        alu();
+        alu2();
+        memoryAccess();
     }
 
     public Instruction fetch() {
