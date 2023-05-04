@@ -1,16 +1,5 @@
-import com.sun.management.OperatingSystemMXBean;
-
 import java.io.File;
 import java.util.*;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.BlockingQueue;
-import java.util.zip.CheckedOutputStream;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReentrantLock;
-
-
-
-
 enum Opcode {
     ADD,
     ADDI,
@@ -46,13 +35,12 @@ public class Simulator {
     }
 
     public boolean finished = false;
-    public int lastCompletedInstruction = -1;
-    private final Lock pcLock = new ReentrantLock(true);
     public int instructionsCount = 0;
     public int PC = 0;
     public boolean isStalled = false;
     public int cycles = 0;
     public ArrayList<Integer> arf = new ArrayList<>();
+    public BranchTargetBuffer branchTargetBuffer = new BranchTargetBuffer();
     public ArrayList<ExecutionObj> aluResStat = new ArrayList<>();
     public ArrayList<ExecutionObj> memAccessResStat = new ArrayList<>();
     public ArrayList<ExecutionObj> readyInstructions = new ArrayList<>();
@@ -62,7 +50,6 @@ public class Simulator {
     public HashMap<Integer, Boolean> scoreboard = new HashMap<>();
     public ArrayList<Integer> memory = new ArrayList<>();
     public ArrayList<Instruction> instructions = new ArrayList<>();
-    public ArrayList<ExecutionObj> reorderBuffer = new ArrayList<>();
     public ArrayList<WriteBackObj> writeBackObjs = new ArrayList<>();
 
     public Instruction fetchedInstruction = null;
@@ -104,17 +91,12 @@ public class Simulator {
                     this.fetchedInstruction = fetch();
                     ExecutionObj decodedObj = decode(this.fetchedInstruction);
                     this.decodedInstruction = decodedObj;
-                    //reorderBuffer.add(decodedObj);
-
                     issue(this.decodedInstruction);
                 }
                 runExecutionUnits();
                 writeback();
             }
             this.cycles++;
-            if (this.cycles > 100000) {
-                this.finished = true;
-            }
         }
         this.arf = this.registers;
     }
@@ -238,7 +220,11 @@ public class Simulator {
         boolean isAluInstruction = isAluInstruction(executionObj.opcode);
         if (isAluInstruction) {
             this.aluResStat.add(executionObj);
-        } else {
+        } else if(isBranch(executionObj.opcode))
+        {
+            this.branchUnitResStat.add(executionObj);
+        }
+        else{
             this.memAccessResStat.add(executionObj);
         }
     }
@@ -423,26 +409,24 @@ public class Simulator {
             }
 //BLEQ R1 R2 ADDRESS
             case BLEQ: {
+
                 int first = this.registers.get(r1);
                 int second = this.registers.get(r2);
                 if (first <= second) {
                     if(sameAsLastCheckpoint && !this.lastCheckpoint.branchTaken)
                     {
-                        //TODO restore from checkpoint and flush pipeline.
-                        this.registers = this.lastCheckpoint.registers;
-                        this.memory = this.lastCheckpoint.memory;
-                        this.fetchedInstruction = null;
-                        this.decodedInstruction = null;
-                        this.aluState = null;
-                        this.memAccessState = null;
-                        this.aluResStat.clear();
-                        this.memAccessResStat.clear();
+                        flush();
+                    }
+                    else {
+                        commit();
                     }
                     newPC = target_address;
                 } else {
                     if (sameAsLastCheckpoint && this.lastCheckpoint.branchTaken) {
-                        //TODO restore from checkpoint and flush pipeline.
                         flush();
+                    }
+                    else {
+                        commit();
                     }
                     newPC = this.lastCheckpoint.PC + 1;
 
@@ -484,7 +468,7 @@ public class Simulator {
                 }
 
             } else {
-                System.out.println("alu queue empty");
+                //System.out.println("alu queue empty");
                 return;
             }
         }
@@ -517,7 +501,7 @@ public class Simulator {
                 }
 
             } else {
-                System.out.println("alu queue empty");
+                //System.out.println("alu queue empty");
                 return;
             }
         }
@@ -550,7 +534,7 @@ public class Simulator {
                 }
 
             } else {
-                System.out.println("alu queue empty");
+                //System.out.println("alu queue empty");
                 return;
             }
         }
@@ -582,7 +566,7 @@ public class Simulator {
                     }
                 }
             } else {
-                System.out.println("memory access queue is empty");
+                //System.out.println("memory access queue is empty");
                 return;
             }
         }
@@ -611,11 +595,25 @@ public class Simulator {
         int checkpointPC = this.PC;
         ArrayList<Integer> checkPointRegisters = this.registers;
         ArrayList<Integer> checkPointMem = this.memory;
-        //always take backwards branches
-        if (target_address > this.PC) {
+        if(branchTargetBuffer.contains(this.PC))
+        {
+            if(branchTargetBuffer.get(this.PC).taken >=2)
+            {
+                this.lastCheckpoint = new Checkpoint(checkpointPC, checkPointRegisters, checkPointMem, executionObj, true);
+                this.PC = target_address;
+            }
+            else {
+                this.lastCheckpoint = new Checkpoint(checkpointPC, checkPointRegisters, checkPointMem, executionObj, false);
+                this.incrementPC();
+            }
+        }
+        //always take backwards branches if entry is not found.
+        else if (target_address > this.PC) {
+            branchTargetBuffer.entries.add(new BranchEntry(this.PC, 1, target_address));
             this.lastCheckpoint = new Checkpoint(checkpointPC, checkPointRegisters, checkPointMem, executionObj, false);
             this.incrementPC();
         } else {
+            branchTargetBuffer.entries.add(new BranchEntry(this.PC, 2, target_address));
             this.lastCheckpoint = new Checkpoint(checkpointPC, checkPointRegisters, checkPointMem, executionObj, true);
             this.PC = target_address;
         }
@@ -623,6 +621,14 @@ public class Simulator {
 
     private void flush()
     {
+        if(this.branchTargetBuffer.contains(this.lastCheckpoint.PC))
+        {
+            if(this.branchTargetBuffer.get(this.lastCheckpoint.PC).taken > 0)
+            {
+                this.branchTargetBuffer.get(this.lastCheckpoint.PC).taken--;
+            }
+        }
+
         this.registers = this.lastCheckpoint.registers;
         this.memory = this.lastCheckpoint.memory;
         this.fetchedInstruction = null;
@@ -631,10 +637,17 @@ public class Simulator {
         this.memAccessState = null;
         this.aluResStat.clear();
         this.memAccessResStat.clear();
+        this.branchUnitResStat.clear();
     }
 
     private void commit()
     {
+        if(this.branchTargetBuffer.contains(this.lastCheckpoint.PC)) {
+            if (this.branchTargetBuffer.get(this.lastCheckpoint.PC).taken < 3) {
+                this.branchTargetBuffer.get(this.lastCheckpoint.PC).taken++;
+            }
+        }
+
         this.arf = this.registers;
     }
     public boolean isAvailable(ExecutionObj obj)
@@ -662,27 +675,15 @@ public class Simulator {
             case DIV:
             case CMP:
             case MUL:
-            case BZ:
-            case BLEQ:
-            case BR:
             case ADD:
             case SUB:
             case AND:
             case NOT:
             case ADDI:
-            case MOV:
-            case LDI:
-            case MOVA:
-            case MOVB: {
+            {
                 return true;
             }
-            case LD:
-            case ST:
-            case HALT: {
-                return false;
-            }
             default:
-                System.out.println("Error, unknown OPCODE in issue assign");
                 return false;
         }
     }
