@@ -52,8 +52,9 @@ public class Simulator {
     public ArrayList<Instruction> instructions = new ArrayList<>();
     public ArrayList<WriteBackObj> writeBackObjs = new ArrayList<>();
 
-    public Instruction fetchedInstruction = null;
-    public ExecutionObj decodedInstruction = null;
+    public ArrayList<Instruction> fetchQueue = new ArrayList<>();
+    public ArrayList<ExecutionObj> decodeQueue = new ArrayList<>();
+
 
     public ExecutionState executionState = null;
     public ExecutionState branchUnitState = null;
@@ -81,6 +82,7 @@ public class Simulator {
             System.out.println("please name the input file:- \"input.txt\"");
         }
 
+        this.cycles += 2;
         clock();
     }
 
@@ -88,10 +90,9 @@ public class Simulator {
         while (!this.finished) {
             for (int i = 0; i < 1; i++) {
                 if (!this.isStalled) {
-                    this.fetchedInstruction = fetch();
-                    ExecutionObj decodedObj = decode(this.fetchedInstruction);
-                    this.decodedInstruction = decodedObj;
-                    issue(this.decodedInstruction);
+                    fetch();
+                    decode();
+                    issue();
                 }
                 runExecutionUnits();
                 writeback();
@@ -117,7 +118,7 @@ public class Simulator {
         branchUnit();
     }
 
-    public Instruction fetch() {
+    public void fetch() {
         System.out.println("fetching");
 
         Instruction instruction = this.instructions.get(this.PC);
@@ -125,12 +126,20 @@ public class Simulator {
         if(isBranch(instruction.opcode))
         {
             //send to branch predictor.
-            branchPredictor(decode(instruction));
+            branchPredictor(fastDecode(instruction));
         }
-        return instruction;
+        fetchQueue.add(instruction);
+        //return instruction;
     }
 
-    public ExecutionObj decode(Instruction instruction) {
+    public void decode() {
+        // if fetchqueue empty, return.
+        if(this.fetchQueue.isEmpty())
+        {
+            return;
+        }
+        Instruction instruction = this.fetchQueue.get(0);
+        this.fetchQueue.remove(0);
         System.out.println("decode");
         //Opcode opcode = Opcode.HALT;
         int r1 = -1;
@@ -208,14 +217,51 @@ public class Simulator {
                 System.out.println("Error, unknown OPCODE when decoding");
                 break;
         }
+        this.decodeQueue.add(new ExecutionObj(instruction.opcode, constant, resultRegister, r1, r2,
+                target_address, memory_address));
+
+    }
+
+    public ExecutionObj fastDecode(Instruction instruction) {
+        System.out.println("fastDecode");
+        int r1 = -1;
+        int r2 = -1;
+        int memory_address = -1;
+        int target_address = -1;
+        int resultRegister = -1;
+        int constant = -1;
+        switch (instruction.opcode) {
+            case BR: // BR ADDRESS
+                target_address = Integer.parseInt(instruction.operands[0]);
+                //execute(instruction.opcode, constant, resultRegister, r1, r2, target_address, memory_address);
+                break;
+            case BZ: // BZ R1 ADDRESS
+                r1 = Integer.parseInt(instruction.operands[0]);
+                target_address = Integer.parseInt(instruction.operands[1]);
+                //execute(instruction.opcode, constant, resultRegister, r1, r2, target_address, memory_address);
+                break;
+            case BLEQ: //BLEQ R1 R2 ADDRESS
+                r1 = Integer.parseInt(instruction.operands[0]);
+                r2 = Integer.parseInt(instruction.operands[1]);
+                target_address = Integer.parseInt(instruction.operands[2]);
+                //execute(instruction.opcode, constant, resultRegister, r1, r2, target_address, memory_address);
+                break;
+            default:
+                System.out.println("Error, only send branches to fast decode");
+                break;
+        }
         return new ExecutionObj(instruction.opcode, constant, resultRegister, r1, r2,
                 target_address, memory_address);
 
     }
-
-
-    public void issue(ExecutionObj executionObj) {
-
+    public void issue() {
+        // if decodequeue empty, return.
+        if(this.decodeQueue.isEmpty())
+        {
+            return;
+        }
+        ExecutionObj executionObj = this.decodeQueue.get(0);
+        this.decodeQueue.remove(0);
         System.out.println("issue");
         boolean isAluInstruction = isAluInstruction(executionObj.opcode);
         if (isAluInstruction) {
@@ -631,13 +677,14 @@ public class Simulator {
 
         this.registers = this.lastCheckpoint.registers;
         this.memory = this.lastCheckpoint.memory;
-        this.fetchedInstruction = null;
-        this.decodedInstruction = null;
+        this.fetchQueue.clear();
+        this.decodeQueue.clear();
         this.aluState = null;
         this.memAccessState = null;
         this.aluResStat.clear();
         this.memAccessResStat.clear();
         this.branchUnitResStat.clear();
+        this.cycles += 2;
     }
 
     private void commit()
