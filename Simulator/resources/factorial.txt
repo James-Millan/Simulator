@@ -1,0 +1,8 @@
+LDI 0 10
+LDI 1 1
+LDI 2 1
+MUL 2 0 2
+SUB 0 1 0
+BZ 0 7
+BR 3
+HALT
